@@ -262,20 +262,27 @@ export async function getMarketMatches(
 }
 
 // One-off data-repair helper: a handful of source sheets had misaligned
-// columns during the original import, which left a barcode number sitting
-// in the "brand" field instead of the real brand name. Every imported row
+// columns during the original import, which left the wrong value sitting in
+// the "brand" field instead of the real brand name — either a barcode
+// number, or (as with the Huda Beauty "Easy Bake"/"Easy Prime" lines) the
+// full product name duplicated into the brand field. Every imported row
 // stores its origin sheet as "Source: <sheet name>" in `notes`, and that
 // sheet name is what should have been used as the brand — so this rewrites
-// any purely-numeric brand back to the correct sheet-derived name. Safe to
-// run more than once: once no numeric brands remain, it's a no-op.
+// any brand that's either purely numeric or identical to the product name
+// back to the correct sheet-derived name. Safe to run more than once: once
+// no broken brands remain, it's a no-op.
 export async function fixNumericBrands(): Promise<{ fixed: number; brands: string[] }> {
   await ensureSchema();
   const { rows } = await getPool().query(
     `UPDATE offers
        SET brand = trim(regexp_replace(notes, '^Source: ', '')),
            updated_at = now()
-     WHERE brand ~ '^[0-9]+$'
-       AND notes ~ '^Source: '
+     WHERE notes ~ '^Source: '
+       AND (
+         brand ~ '^[0-9]+$'
+         OR lower(trim(brand)) = lower(trim(product))
+       )
+       AND lower(trim(brand)) <> lower(trim(regexp_replace(notes, '^Source: ', '')))
      RETURNING brand;`
   );
   const brands = Array.from(new Set(rows.map((r) => r.brand as string))).sort();

@@ -236,12 +236,14 @@ export default function DashboardPage() {
         <div className="flex items-center justify-between gap-4">
           <div>
             <h2 className="text-sm font-medium text-amber-900">
-              Fix numeric brand names from import
+              Fix broken brand names from import
             </h2>
             <p className="mt-1 text-xs text-amber-700">
-              A few source sheets had misaligned columns, leaving a barcode number in the brand
-              field for a handful of rows. This looks them up by source sheet and corrects the
-              brand name. Safe to run any time — it&apos;s a no-op once everything is fixed.
+              A few source sheets had misaligned columns, leaving either a barcode number or the
+              full product name in the brand field for a handful of rows (e.g. Huda Beauty&apos;s
+              &quot;Easy Bake&quot;/&quot;Easy Prime&quot; line). This looks them up by source sheet
+              and corrects the brand name. Safe to run any time — it&apos;s a no-op once everything
+              is fixed.
             </p>
           </div>
           <button
