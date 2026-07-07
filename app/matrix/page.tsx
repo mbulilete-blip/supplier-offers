@@ -24,6 +24,14 @@ const isToday = (iso: string): boolean => {
   );
 };
 
+// Short, always-visible date label under each price (the earlier hover-only
+// tooltip wasn't discoverable enough - the date needs to be readable at a
+// glance, not just on hover).
+const shortDate = (iso: string): string => {
+  if (isToday(iso)) return "Today";
+  return new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+};
+
 // One brand's worth of offers can be safely pulled in one request (see
 // MAX_PAGE_SIZE in lib/db.ts) - this view is meant to show everything for a
 // single brand at once, laid out as a grid, so pagination would defeat the
@@ -194,12 +202,21 @@ export default function MatrixPage() {
                           }`}
                         >
                           {cell ? (
-                            <>
-                              {cell.price.toFixed(2)} {cell.currency}
-                              {addedToday && (
-                                <span className="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-blue-500 align-middle" />
-                              )}
-                            </>
+                            <div className="leading-tight">
+                              <div>
+                                {cell.price.toFixed(2)} {cell.currency}
+                                {addedToday && (
+                                  <span className="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-blue-500 align-middle" />
+                                )}
+                              </div>
+                              <div
+                                className={`text-[10px] font-normal ${
+                                  addedToday ? "text-blue-500" : "text-gray-400"
+                                }`}
+                              >
+                                {shortDate(cell.createdAt)}
+                              </div>
+                            </div>
                           ) : (
                             "—"
                           )}
@@ -215,7 +232,9 @@ export default function MatrixPage() {
       )}
       {!loading && brand && products.length > 0 && (
         <p className="text-xs text-gray-400">
-          Hover any price to see when it was added. <span className="inline-block h-1.5 w-1.5 rounded-full bg-blue-500 align-middle" /> marks offers added today.
+          The date under each price is when that offer was added.{" "}
+          <span className="inline-block h-1.5 w-1.5 rounded-full bg-blue-500 align-middle" /> and blue
+          text mark offers added today.
         </p>
       )}
 
