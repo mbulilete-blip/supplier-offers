@@ -78,6 +78,7 @@ function mapRow(row: any): Offer {
 
 export type ListOffersParams = {
   search?: string;
+  brand?: string;
   limit?: number;
   offset?: number;
 };
@@ -92,7 +93,7 @@ export type ListOffersResult = {
 // thousands of rows (it was crashing the tab), so the API now always returns
 // a bounded page plus a total count for building pager controls.
 const DEFAULT_PAGE_SIZE = 100;
-const MAX_PAGE_SIZE = 500;
+const MAX_PAGE_SIZE = 2000;
 
 export async function listOffers(params: ListOffersParams = {}): Promise<ListOffersResult> {
   await ensureSchema();
@@ -101,26 +102,48 @@ export async function listOffers(params: ListOffersParams = {}): Promise<ListOff
   const limit = Math.min(Math.max(params.limit ?? DEFAULT_PAGE_SIZE, 1), MAX_PAGE_SIZE);
   const offset = Math.max(params.offset ?? 0, 0);
   const search = params.search?.trim();
+  const brand = params.brand?.trim();
 
-  const whereClause = search
-    ? `WHERE product ILIKE $1 OR brand ILIKE $1 OR supplier ILIKE $1 OR sku ILIKE $1`
-    : "";
-  const searchParam = search ? [`%${search}%`] : [];
+  const conditions: string[] = [];
+  const values: unknown[] = [];
+
+  if (brand) {
+    values.push(brand);
+    conditions.push(`brand = $${values.length}`);
+  }
+  if (search) {
+    values.push(`%${search}%`);
+    const idx = values.length;
+    conditions.push(
+      `(product ILIKE $${idx} OR brand ILIKE $${idx} OR supplier ILIKE $${idx} OR sku ILIKE $${idx})`
+    );
+  }
+  const whereClause = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
 
   const { rows: countRows } = await pool.query(
     `SELECT COUNT(*)::int AS count FROM offers ${whereClause};`,
-    searchParam
+    values
   );
   const total = countRows[0]?.count ?? 0;
 
   const { rows } = await pool.query(
     `SELECT * FROM offers ${whereClause}
      ORDER BY product ASC, price ASC
-     LIMIT $${searchParam.length + 1} OFFSET $${searchParam.length + 2};`,
-    [...searchParam, limit, offset]
+     LIMIT $${values.length + 1} OFFSET $${values.length + 2};`,
+    [...values, limit, offset]
   );
 
   return { offers: rows.map(mapRow), total };
+}
+
+// Distinct brand names + offer counts, used to power the "browse by brand"
+// dropdown/list in the UI instead of making users type a brand out by hand.
+export async function listBrands(): Promise<{ brand: string; count: number }[]> {
+  await ensureSchema();
+  const { rows } = await getPool().query(
+    `SELECT brand, COUNT(*)::int AS count FROM offers GROUP BY brand ORDER BY brand ASC;`
+  );
+  return rows.map((r) => ({ brand: r.brand, count: r.count }));
 }
 
 export async function createOffer(input: OfferInput): Promise<Offer> {

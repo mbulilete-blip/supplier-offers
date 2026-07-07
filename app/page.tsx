@@ -51,6 +51,11 @@ export default function DashboardPage() {
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
 
+  // Brand dropdown, populated from /api/brands, so browsing by brand doesn't
+  // require typing the exact name out.
+  const [brands, setBrands] = useState<{ brand: string; count: number }[]>([]);
+  const [brand, setBrand] = useState("");
+
   const [csvText, setCsvText] = useState("");
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<{
@@ -58,15 +63,17 @@ export default function DashboardPage() {
     errors: { line: number; message: string }[];
   } | null>(null);
 
-  const load = async (opts?: { page?: number; search?: string }) => {
+  const load = async (opts?: { page?: number; search?: string; brand?: string }) => {
     setLoading(true);
     const targetPage = opts?.page ?? page;
     const targetSearch = opts?.search ?? search;
+    const targetBrand = opts?.brand ?? brand;
     const params = new URLSearchParams({
       page: String(targetPage),
       limit: String(PAGE_SIZE),
     });
     if (targetSearch) params.set("search", targetSearch);
+    if (targetBrand) params.set("brand", targetBrand);
     const res = await fetch(`/api/offers?${params.toString()}`);
     const data = await res.json();
     setOffers(data.offers ?? []);
@@ -88,8 +95,17 @@ export default function DashboardPage() {
 
   useEffect(() => {
     load({ page: 1, search: "" });
+    fetch("/api/brands")
+      .then((r) => r.json())
+      .then((data) => setBrands(Array.isArray(data) ? data : []));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const handleBrandChange = (value: string) => {
+    setBrand(value);
+    setPage(1);
+    load({ page: 1, brand: value });
+  };
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
@@ -338,12 +354,26 @@ export default function DashboardPage() {
               ? "Loading…"
               : `${total.toLocaleString()} offer(s) — page ${page} of ${totalPages}`}
           </h2>
-          <input
-            className="input w-64"
-            placeholder="Search product, brand, supplier, SKU…"
-            value={searchInput}
-            onChange={(e) => setSearchInput(e.target.value)}
-          />
+          <div className="flex items-center gap-3">
+            <select
+              className="input w-56"
+              value={brand}
+              onChange={(e) => handleBrandChange(e.target.value)}
+            >
+              <option value="">All brands ({brands.reduce((sum, b) => sum + b.count, 0).toLocaleString()})</option>
+              {brands.map((b) => (
+                <option key={b.brand} value={b.brand}>
+                  {b.brand} ({b.count.toLocaleString()})
+                </option>
+              ))}
+            </select>
+            <input
+              className="input w-64"
+              placeholder="Search product, brand, supplier, SKU…"
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+            />
+          </div>
         </div>
 
         <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white">

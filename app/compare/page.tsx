@@ -26,6 +26,9 @@ type Offer = {
 // page size.
 const MIN_SEARCH_LENGTH = 2;
 const COMPARE_PAGE_SIZE = 500;
+// Browsing a whole brand needs a bigger cap than free-text search, since a
+// single brand can have hundreds of products x suppliers.
+const BRAND_PAGE_SIZE = 1500;
 
 export default function ComparePage() {
   const [offers, setOffers] = useState<Offer[]>([]);
@@ -34,19 +37,33 @@ export default function ComparePage() {
   const [search, setSearch] = useState("");
   const [truncated, setTruncated] = useState(false);
 
+  // Brand dropdown, populated from /api/brands. Selecting a brand bypasses
+  // the "must type a search term" requirement below.
+  const [brands, setBrands] = useState<{ brand: string; count: number }[]>([]);
+  const [brand, setBrand] = useState("");
+
+  useEffect(() => {
+    fetch("/api/brands")
+      .then((r) => r.json())
+      .then((data) => setBrands(Array.isArray(data) ? data : []));
+  }, []);
+
   useEffect(() => {
     const t = setTimeout(() => setSearch(searchInput.trim()), 300);
     return () => clearTimeout(t);
   }, [searchInput]);
 
   useEffect(() => {
-    if (search.length < MIN_SEARCH_LENGTH) {
+    if (search.length < MIN_SEARCH_LENGTH && !brand) {
       setOffers([]);
       setTruncated(false);
       return;
     }
     setLoading(true);
-    const params = new URLSearchParams({ search, limit: String(COMPARE_PAGE_SIZE), page: "1" });
+    const limit = brand && search.length < MIN_SEARCH_LENGTH ? BRAND_PAGE_SIZE : COMPARE_PAGE_SIZE;
+    const params = new URLSearchParams({ limit: String(limit), page: "1" });
+    if (search.length >= MIN_SEARCH_LENGTH) params.set("search", search);
+    if (brand) params.set("brand", brand);
     fetch(`/api/offers?${params.toString()}`)
       .then((r) => r.json())
       .then((data) => {
@@ -54,7 +71,11 @@ export default function ComparePage() {
         setTruncated((data.total ?? 0) > (data.offers?.length ?? 0));
         setLoading(false);
       });
-  }, [search]);
+  }, [search, brand]);
+
+  const handleBrandChange = (value: string) => {
+    setBrand(value);
+  };
 
   const groups = useMemo(() => {
     const map = new Map<string, Offer[]>();
@@ -80,28 +101,42 @@ export default function ComparePage() {
         </p>
       </section>
 
-      <input
-        className="input w-full max-w-sm"
-        placeholder="Search product, brand, supplier, SKU… (min 2 characters)"
-        value={searchInput}
-        onChange={(e) => setSearchInput(e.target.value)}
-      />
+      <div className="flex flex-wrap items-center gap-3">
+        <select
+          className="input w-56"
+          value={brand}
+          onChange={(e) => handleBrandChange(e.target.value)}
+        >
+          <option value="">All brands</option>
+          {brands.map((b) => (
+            <option key={b.brand} value={b.brand}>
+              {b.brand} ({b.count.toLocaleString()})
+            </option>
+          ))}
+        </select>
+        <input
+          className="input w-full max-w-sm"
+          placeholder="Search product, brand, supplier, SKU… (min 2 characters)"
+          value={searchInput}
+          onChange={(e) => setSearchInput(e.target.value)}
+        />
+      </div>
 
-      {search.length < MIN_SEARCH_LENGTH && (
+      {search.length < MIN_SEARCH_LENGTH && !brand && (
         <p className="text-sm text-gray-400">
-          Type at least {MIN_SEARCH_LENGTH} characters to compare offers.
+          Pick a brand or type at least {MIN_SEARCH_LENGTH} characters to compare offers.
         </p>
       )}
 
       {loading && <p className="text-sm text-gray-400">Loading…</p>}
 
-      {!loading && search.length >= MIN_SEARCH_LENGTH && groups.length === 0 && (
-        <p className="text-sm text-gray-400">No offers match that search.</p>
+      {!loading && (search.length >= MIN_SEARCH_LENGTH || brand) && groups.length === 0 && (
+        <p className="text-sm text-gray-400">No offers match that filter.</p>
       )}
 
       {!loading && truncated && (
         <p className="text-xs text-amber-600">
-          Showing the first {COMPARE_PAGE_SIZE} matching offers. Narrow your search to see
+          Showing the first {offers.length} matching offers. Narrow your search or brand to see
           everything.
         </p>
       )}

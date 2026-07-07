@@ -7,12 +7,13 @@ export const dynamic = "force-dynamic";
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const search = searchParams.get("search") ?? undefined;
+  const brand = searchParams.get("brand") ?? undefined;
   const limit = searchParams.get("limit") ? Number(searchParams.get("limit")) : undefined;
   const page = searchParams.get("page") ? Number(searchParams.get("page")) : 1;
   const effectiveLimit = limit && !Number.isNaN(limit) ? limit : 100;
   const offset = (Math.max(page, 1) - 1) * effectiveLimit;
 
-  const { offers, total } = await listOffers({ search, limit: effectiveLimit, offset });
+  const { offers, total } = await listOffers({ search, brand, limit: effectiveLimit, offset });
   return NextResponse.json({ offers, total, page: Math.max(page, 1), pageSize: effectiveLimit });
 }
 
