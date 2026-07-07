@@ -469,6 +469,7 @@ export default function DashboardPage() {
                 <th className="px-4 py-3">Lead time</th>
                 <th className="px-4 py-3">Terms</th>
                 <th className="px-4 py-3">Region</th>
+                <th className="px-4 py-3">Date added</th>
                 <th className="px-4 py-3"></th>
               </tr>
             </thead>
@@ -488,6 +489,9 @@ export default function DashboardPage() {
                   <td className="px-4 py-3">{o.leadTimeDays ? `${o.leadTimeDays}d` : "—"}</td>
                   <td className="px-4 py-3">{o.paymentTerms ?? "—"}</td>
                   <td className="px-4 py-3">{o.region ?? "—"}</td>
+                  <td className="px-4 py-3 whitespace-nowrap text-gray-500">
+                    {o.createdAt ? new Date(o.createdAt).toLocaleDateString() : "—"}
+                  </td>
                   <td className="px-4 py-3 text-right">
                     <button
                       onClick={() => handleDelete(o.id)}
@@ -500,7 +504,7 @@ export default function DashboardPage() {
               ))}
               {!loading && offers.length === 0 && (
                 <tr>
-                  <td colSpan={9} className="px-4 py-8 text-center text-gray-400">
+                  <td colSpan={10} className="px-4 py-8 text-center text-gray-400">
                     No offers yet.
                   </td>
                 </tr>
