@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 type Offer = {
   id: number;
@@ -34,12 +34,21 @@ const emptyForm = {
   notes: "",
 };
 
+const PAGE_SIZE = 100;
+
 export default function DashboardPage() {
   const [offers, setOffers] = useState<Offer[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [form, setForm] = useState(emptyForm);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // searchInput tracks every keystroke; `search` is the debounced value that
+  // actually triggers a (server-side, paginated) fetch, so typing doesn't
+  // fire a request per character.
+  const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
 
   const [csvText, setCsvText] = useState("");
@@ -49,29 +58,46 @@ export default function DashboardPage() {
     errors: { line: number; message: string }[];
   } | null>(null);
 
-  const load = async () => {
+  const load = async (opts?: { page?: number; search?: string }) => {
     setLoading(true);
-    const res = await fetch("/api/offers");
+    const targetPage = opts?.page ?? page;
+    const targetSearch = opts?.search ?? search;
+    const params = new URLSearchParams({
+      page: String(targetPage),
+      limit: String(PAGE_SIZE),
+    });
+    if (targetSearch) params.set("search", targetSearch);
+    const res = await fetch(`/api/offers?${params.toString()}`);
     const data = await res.json();
-    setOffers(data);
+    setOffers(data.offers ?? []);
+    setTotal(data.total ?? 0);
     setLoading(false);
   };
 
+  // Debounce the search box: wait 300ms after the user stops typing, then
+  // reset to page 1 and fetch just that filtered page from the server.
   useEffect(() => {
-    load();
+    const t = setTimeout(() => {
+      setSearch(searchInput);
+      setPage(1);
+      load({ page: 1, search: searchInput });
+    }, 300);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchInput]);
+
+  useEffect(() => {
+    load({ page: 1, search: "" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return offers;
-    return offers.filter(
-      (o) =>
-        o.product.toLowerCase().includes(q) ||
-        o.brand.toLowerCase().includes(q) ||
-        o.supplier.toLowerCase().includes(q) ||
-        (o.sku ?? "").toLowerCase().includes(q)
-    );
-  }, [offers, search]);
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+
+  const goToPage = (p: number) => {
+    const clamped = Math.min(Math.max(p, 1), totalPages);
+    setPage(clamped);
+    load({ page: clamped });
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -308,13 +334,15 @@ export default function DashboardPage() {
       <section>
         <div className="mb-4 flex items-center justify-between">
           <h2 className="text-lg font-medium">
-            {loading ? "Loading…" : `${filtered.length} offer(s)`}
+            {loading
+              ? "Loading…"
+              : `${total.toLocaleString()} offer(s) — page ${page} of ${totalPages}`}
           </h2>
           <input
             className="input w-64"
             placeholder="Search product, brand, supplier, SKU…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
           />
         </div>
 
@@ -334,7 +362,7 @@ export default function DashboardPage() {
               </tr>
             </thead>
             <tbody>
-              {filtered.map((o) => (
+              {offers.map((o) => (
                 <tr key={o.id} className="border-b border-gray-100 last:border-0">
                   <td className="px-4 py-3 font-medium">
                     {o.product}
@@ -359,7 +387,7 @@ export default function DashboardPage() {
                   </td>
                 </tr>
               ))}
-              {!loading && filtered.length === 0 && (
+              {!loading && offers.length === 0 && (
                 <tr>
                   <td colSpan={9} className="px-4 py-8 text-center text-gray-400">
                     No offers yet.
@@ -368,6 +396,29 @@ export default function DashboardPage() {
               )}
             </tbody>
           </table>
+        </div>
+
+        <div className="mt-4 flex items-center justify-between text-sm">
+          <span className="text-gray-500">
+            Showing {offers.length === 0 ? 0 : (page - 1) * PAGE_SIZE + 1}–
+            {(page - 1) * PAGE_SIZE + offers.length} of {total.toLocaleString()}
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => goToPage(page - 1)}
+              disabled={page <= 1 || loading}
+              className="rounded-lg border border-gray-300 px-3 py-1.5 disabled:opacity-40"
+            >
+              Previous
+            </button>
+            <button
+              onClick={() => goToPage(page + 1)}
+              disabled={page >= totalPages || loading}
+              className="rounded-lg border border-gray-300 px-3 py-1.5 disabled:opacity-40"
+            >
+              Next
+            </button>
+          </div>
         </div>
       </section>
     </div>

@@ -76,12 +76,51 @@ function mapRow(row: any): Offer {
   };
 }
 
-export async function listOffers(): Promise<Offer[]> {
+export type ListOffersParams = {
+  search?: string;
+  limit?: number;
+  offset?: number;
+};
+
+export type ListOffersResult = {
+  offers: Offer[];
+  total: number;
+};
+
+// Paginated + server-side filtered listing. Loading the whole table into the
+// browser stopped being viable once the table grew into the tens of
+// thousands of rows (it was crashing the tab), so the API now always returns
+// a bounded page plus a total count for building pager controls.
+const DEFAULT_PAGE_SIZE = 100;
+const MAX_PAGE_SIZE = 500;
+
+export async function listOffers(params: ListOffersParams = {}): Promise<ListOffersResult> {
   await ensureSchema();
-  const { rows } = await getPool().query(
-    `SELECT * FROM offers ORDER BY product ASC, price ASC;`
+  const pool = getPool();
+
+  const limit = Math.min(Math.max(params.limit ?? DEFAULT_PAGE_SIZE, 1), MAX_PAGE_SIZE);
+  const offset = Math.max(params.offset ?? 0, 0);
+  const search = params.search?.trim();
+
+  const whereClause = search
+    ? `WHERE product ILIKE $1 OR brand ILIKE $1 OR supplier ILIKE $1 OR sku ILIKE $1`
+    : "";
+  const searchParam = search ? [`%${search}%`] : [];
+
+  const { rows: countRows } = await pool.query(
+    `SELECT COUNT(*)::int AS count FROM offers ${whereClause};`,
+    searchParam
   );
-  return rows.map(mapRow);
+  const total = countRows[0]?.count ?? 0;
+
+  const { rows } = await pool.query(
+    `SELECT * FROM offers ${whereClause}
+     ORDER BY product ASC, price ASC
+     LIMIT $${searchParam.length + 1} OFFSET $${searchParam.length + 2};`,
+    [...searchParam, limit, offset]
+  );
+
+  return { offers: rows.map(mapRow), total };
 }
 
 export async function createOffer(input: OfferInput): Promise<Offer> {

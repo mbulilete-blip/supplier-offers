@@ -18,34 +18,47 @@ type Offer = {
   notes: string | null;
 };
 
+// The table now holds tens of thousands of rows, so this page can no longer
+// fetch the whole thing on load (that's what was crashing the browser tab).
+// Comparison only makes sense for a specific product/brand/supplier/SKU
+// anyway, so a search term is now required before we fetch anything, and the
+// fetch goes through the same paginated /api/offers endpoint with a capped
+// page size.
+const MIN_SEARCH_LENGTH = 2;
+const COMPARE_PAGE_SIZE = 500;
+
 export default function ComparePage() {
   const [offers, setOffers] = useState<Offer[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
+  const [truncated, setTruncated] = useState(false);
 
   useEffect(() => {
-    fetch("/api/offers")
+    const t = setTimeout(() => setSearch(searchInput.trim()), 300);
+    return () => clearTimeout(t);
+  }, [searchInput]);
+
+  useEffect(() => {
+    if (search.length < MIN_SEARCH_LENGTH) {
+      setOffers([]);
+      setTruncated(false);
+      return;
+    }
+    setLoading(true);
+    const params = new URLSearchParams({ search, limit: String(COMPARE_PAGE_SIZE), page: "1" });
+    fetch(`/api/offers?${params.toString()}`)
       .then((r) => r.json())
       .then((data) => {
-        setOffers(data);
+        setOffers(data.offers ?? []);
+        setTruncated((data.total ?? 0) > (data.offers?.length ?? 0));
         setLoading(false);
       });
-  }, []);
+  }, [search]);
 
   const groups = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    const filtered = q
-      ? offers.filter(
-          (o) =>
-            o.product.toLowerCase().includes(q) ||
-            o.brand.toLowerCase().includes(q) ||
-            o.supplier.toLowerCase().includes(q) ||
-            (o.sku ?? "").toLowerCase().includes(q)
-        )
-      : offers;
-
     const map = new Map<string, Offer[]>();
-    for (const o of filtered) {
+    for (const o of offers) {
       const key = (o.sku ? `${o.product}__${o.sku}` : o.product).toLowerCase();
       if (!map.has(key)) map.set(key, []);
       map.get(key)!.push(o);
@@ -54,29 +67,43 @@ export default function ComparePage() {
     return Array.from(map.values())
       .map((list) => list.slice().sort((a, b) => a.price - b.price))
       .sort((a, b) => a[0].product.localeCompare(b[0].product));
-  }, [offers, search]);
+  }, [offers]);
 
   return (
     <div className="space-y-8">
       <section>
         <h1 className="text-2xl font-semibold">Compare Offers</h1>
         <p className="mt-1 text-sm text-gray-500">
-          Offers grouped by product. Lowest price per product is highlighted. Margin is
-          calculated against RRP where available.
+          Search for a product, brand, supplier, or SKU to compare offers side by side.
+          Lowest price per product is highlighted. Margin is calculated against RRP where
+          available.
         </p>
       </section>
 
       <input
         className="input w-full max-w-sm"
-        placeholder="Search product, brand, supplier, SKU…"
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
+        placeholder="Search product, brand, supplier, SKU… (min 2 characters)"
+        value={searchInput}
+        onChange={(e) => setSearchInput(e.target.value)}
       />
+
+      {search.length < MIN_SEARCH_LENGTH && (
+        <p className="text-sm text-gray-400">
+          Type at least {MIN_SEARCH_LENGTH} characters to compare offers.
+        </p>
+      )}
 
       {loading && <p className="text-sm text-gray-400">Loading…</p>}
 
-      {!loading && groups.length === 0 && (
-        <p className="text-sm text-gray-400">No offers to compare yet.</p>
+      {!loading && search.length >= MIN_SEARCH_LENGTH && groups.length === 0 && (
+        <p className="text-sm text-gray-400">No offers match that search.</p>
+      )}
+
+      {!loading && truncated && (
+        <p className="text-xs text-amber-600">
+          Showing the first {COMPARE_PAGE_SIZE} matching offers. Narrow your search to see
+          everything.
+        </p>
       )}
 
       <div className="space-y-6">
