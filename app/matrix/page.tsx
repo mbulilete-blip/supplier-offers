@@ -68,7 +68,7 @@ export default function MatrixPage() {
       });
   }, [brand]);
 
-  const { products, suppliers, cellPrice } = useMemo(() => {
+  const { products, suppliers, cellPrice, supplierLastUpdated } = useMemo(() => {
     const supplierSet = new Set<string>();
     const productMap = new Map<string, { product: string; sku: string | null }>();
     // key -> supplier -> {price, currency, rrp, createdAt}
@@ -76,6 +76,10 @@ export default function MatrixPage() {
       string,
       Map<string, { price: number; currency: string; rrp: number | null; createdAt: string }>
     >();
+    // Most recent createdAt seen for each supplier, across this brand's
+    // offers - shown once in the column header instead of repeating a date
+    // under every price.
+    const lastUpdated = new Map<string, string>();
 
     for (const o of offers) {
       // Group by SKU/EAN alone when one is present - that's the real product
@@ -91,12 +95,22 @@ export default function MatrixPage() {
         productMap.set(key, { product: o.product, sku: o.sku });
       }
       supplierSet.add(o.supplier);
+
+      const lastSeen = lastUpdated.get(o.supplier);
+      if (!lastSeen || new Date(o.createdAt) > new Date(lastSeen)) {
+        lastUpdated.set(o.supplier, o.createdAt);
+      }
+
       if (!cells.has(key)) cells.set(key, new Map());
       const bySupplier = cells.get(key)!;
       const existing = bySupplier.get(o.supplier);
-      // If duplicates exist for the same product+supplier (e.g. the same
-      // price list imported more than once), keep the lower price.
-      if (!existing || o.price < existing.price) {
+      // If a supplier has more than one entry for the same product - e.g.
+      // they resent an updated price list later - keep whichever one was
+      // added most recently. That's the supplier's current price. Keeping
+      // the lowest price instead (the old behavior) could surface a stale,
+      // no-longer-available price over a price the supplier actually quotes
+      // today.
+      if (!existing || new Date(o.createdAt) > new Date(existing.createdAt)) {
         bySupplier.set(o.supplier, {
           price: o.price,
           currency: o.currency,
@@ -115,6 +129,7 @@ export default function MatrixPage() {
       products: productsSorted,
       suppliers: suppliersSorted,
       cellPrice: cells,
+      supplierLastUpdated: lastUpdated,
     };
   }, [offers]);
 
@@ -158,11 +173,23 @@ export default function MatrixPage() {
             <thead className="border-b border-gray-200 bg-gray-50 uppercase tracking-wide text-gray-500">
               <tr>
                 <th className="sticky left-0 z-10 bg-gray-50 px-3 py-2">Product</th>
-                {suppliers.map((s) => (
-                  <th key={s} className="px-3 py-2 text-right whitespace-nowrap">
-                    {s}
-                  </th>
-                ))}
+                {suppliers.map((s) => {
+                  const updated = supplierLastUpdated.get(s);
+                  return (
+                    <th key={s} className="px-3 py-2 text-right whitespace-nowrap">
+                      <div>{s}</div>
+                      {updated && (
+                        <div
+                          className={`text-[10px] font-normal normal-case ${
+                            isToday(updated) ? "text-blue-500" : "text-gray-400"
+                          }`}
+                        >
+                          Updated {shortDate(updated)}
+                        </div>
+                      )}
+                    </th>
+                  );
+                })}
               </tr>
             </thead>
             <tbody>
@@ -202,21 +229,12 @@ export default function MatrixPage() {
                           }`}
                         >
                           {cell ? (
-                            <div className="leading-tight">
-                              <div>
-                                {cell.price.toFixed(2)} {cell.currency}
-                                {addedToday && (
-                                  <span className="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-blue-500 align-middle" />
-                                )}
-                              </div>
-                              <div
-                                className={`text-[10px] font-normal ${
-                                  addedToday ? "text-blue-500" : "text-gray-400"
-                                }`}
-                              >
-                                {shortDate(cell.createdAt)}
-                              </div>
-                            </div>
+                            <>
+                              {cell.price.toFixed(2)} {cell.currency}
+                              {addedToday && (
+                                <span className="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-blue-500 align-middle" />
+                              )}
+                            </>
                           ) : (
                             "—"
                           )}
@@ -232,9 +250,10 @@ export default function MatrixPage() {
       )}
       {!loading && brand && products.length > 0 && (
         <p className="text-xs text-gray-400">
-          The date under each price is when that offer was added.{" "}
-          <span className="inline-block h-1.5 w-1.5 rounded-full bg-blue-500 align-middle" /> and blue
-          text mark offers added today.
+          &quot;Updated&quot; under each supplier is when their most recent price for this brand
+          was added. Hover any price for that specific offer&apos;s date.{" "}
+          <span className="inline-block h-1.5 w-1.5 rounded-full bg-blue-500 align-middle" /> and
+          blue text mark today.
         </p>
       )}
 
