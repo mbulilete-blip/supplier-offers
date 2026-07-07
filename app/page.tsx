@@ -239,11 +239,12 @@ export default function DashboardPage() {
               Fix broken brand names from import
             </h2>
             <p className="mt-1 text-xs text-amber-700">
-              A few source sheets had misaligned columns, leaving either a barcode number or the
-              full product name in the brand field for a handful of rows (e.g. Huda Beauty&apos;s
-              &quot;Easy Bake&quot;/&quot;Easy Prime&quot; line). This looks them up by source sheet
-              and corrects the brand name. Safe to run any time — it&apos;s a no-op once everything
-              is fixed.
+              A few source sheets had misaligned columns, so the brand field for a handful of rows
+              ended up wrong — a barcode number, the full product name, or just a fragment of it
+              (e.g. Huda Beauty&apos;s &quot;Easy Bake&quot; line, or Elizabeth Arden&apos;s
+              &quot;5th Ave NYC Downtown&quot;). This restores the brand from each row&apos;s
+              original source sheet, whatever the corruption looked like. Safe to run any time —
+              it&apos;s a no-op once brand matches source everywhere.
             </p>
           </div>
           <button

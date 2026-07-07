@@ -261,16 +261,17 @@ export async function getMarketMatches(
   return map;
 }
 
-// One-off data-repair helper: a handful of source sheets had misaligned
-// columns during the original import, which left the wrong value sitting in
-// the "brand" field instead of the real brand name — either a barcode
-// number, or (as with the Huda Beauty "Easy Bake"/"Easy Prime" lines) the
-// full product name duplicated into the brand field. Every imported row
-// stores its origin sheet as "Source: <sheet name>" in `notes`, and that
-// sheet name is what should have been used as the brand — so this rewrites
-// any brand that's either purely numeric or identical to the product name
-// back to the correct sheet-derived name. Safe to run more than once: once
-// no broken brands remain, it's a no-op.
+// One-off data-repair helper: the original bulk import came from a workbook
+// where each tab was named after the brand it held, and every row stores
+// that tab name as "Source: <tab name>" in `notes`. A handful of source
+// sheets had misaligned columns, so the "brand" field ended up with the
+// wrong value in several different ways — a barcode number, the full
+// product name duplicated in, or just a fragment of the product/line name
+// (e.g. "5th Ave NYC Downtown" instead of "Elizabeth Arden"). Rather than
+// detect each corruption shape individually, this trusts the tab-derived
+// source unconditionally: whenever it disagrees with the current brand, the
+// source wins. Safe to run more than once: once brand matches source
+// everywhere, it's a no-op.
 export async function fixNumericBrands(): Promise<{ fixed: number; brands: string[] }> {
   await ensureSchema();
   const { rows } = await getPool().query(
@@ -278,10 +279,6 @@ export async function fixNumericBrands(): Promise<{ fixed: number; brands: strin
        SET brand = trim(regexp_replace(notes, '^Source: ', '')),
            updated_at = now()
      WHERE notes ~ '^Source: '
-       AND (
-         brand ~ '^[0-9]+$'
-         OR lower(trim(brand)) = lower(trim(product))
-       )
        AND lower(trim(brand)) <> lower(trim(regexp_replace(notes, '^Source: ', '')))
      RETURNING brand;`
   );
