@@ -1,6 +1,16 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import {
+  ColumnMapping,
+  ColumnRole,
+  ROLE_LABELS,
+  buildOffersFromMapping,
+  detectColumns,
+  findHeaderRow,
+  offersToCsv,
+  readFileAsRows,
+} from "@/lib/smartImport";
 
 type CompareRow = {
   supplier: string;
@@ -36,8 +46,33 @@ const VERDICT_CLASS: Record<CompareRow["verdict"], string> = {
   new: "bg-blue-50 text-blue-700",
 };
 
+const ROLE_OPTIONS: ColumnRole[] = [
+  "ignore",
+  "supplier",
+  "brand",
+  "product",
+  "sku",
+  "price",
+  "currency",
+  "rrp",
+  "moq",
+  "leadTimeDays",
+  "paymentTerms",
+  "region",
+  "extra",
+];
+
 export default function ImportCheckPage() {
-  const [csvText, setCsvText] = useState("");
+  const [fileName, setFileName] = useState<string | null>(null);
+  const [rows, setRows] = useState<string[][]>([]);
+  const [headerRowIndex, setHeaderRowIndex] = useState(0);
+  const [mapping, setMapping] = useState<ColumnMapping[]>([]);
+  const [readError, setReadError] = useState<string | null>(null);
+
+  const [defaultSupplier, setDefaultSupplier] = useState("");
+  const [defaultBrand, setDefaultBrand] = useState("");
+  const [defaultCurrency, setDefaultCurrency] = useState("EUR");
+
   const [comparing, setComparing] = useState(false);
   const [result, setResult] = useState<CompareResult | null>(null);
   const [importing, setImporting] = useState(false);
@@ -45,21 +80,72 @@ export default function ImportCheckPage() {
   const [filter, setFilter] = useState<CompareRow["verdict"] | "all">("all");
 
   const handleFile = async (file: File) => {
-    const text = await file.text();
-    setCsvText(text);
+    setReadError(null);
+    setResult(null);
+    setImported(null);
+    setFileName(file.name);
+    try {
+      const grid = await readFileAsRows(file);
+      if (grid.length === 0) {
+        setReadError("This file appears to be empty.");
+        setRows([]);
+        setMapping([]);
+        return;
+      }
+      const hIdx = findHeaderRow(grid);
+      setRows(grid);
+      setHeaderRowIndex(hIdx);
+      setMapping(detectColumns(grid[hIdx]));
+      // Reasonable default: use the file name (minus extension/dates-ish
+      // noise) as a starting guess for supplier when the file has none.
+      setDefaultSupplier((prev) => prev || file.name.replace(/\.[^.]+$/, ""));
+    } catch (err) {
+      setReadError(err instanceof Error ? err.message : "Could not read this file.");
+      setRows([]);
+      setMapping([]);
+    }
+  };
+
+  const handleHeaderRowChange = (idx: number) => {
+    setHeaderRowIndex(idx);
+    if (rows[idx]) setMapping(detectColumns(rows[idx]));
     setResult(null);
     setImported(null);
   };
 
+  const setRole = (index: number, role: ColumnRole) => {
+    setMapping((prev) => prev.map((m) => (m.index === index ? { ...m, role } : m)));
+    setResult(null);
+    setImported(null);
+  };
+
+  const setSupplierLabel = (index: number, label: string) => {
+    setMapping((prev) => prev.map((m) => (m.index === index ? { ...m, supplierLabel: label } : m)));
+  };
+
+  const built = useMemo(() => {
+    if (rows.length === 0 || mapping.length === 0) return null;
+    return buildOffersFromMapping(rows, headerRowIndex, mapping, {
+      defaultSupplier: defaultSupplier || undefined,
+      defaultBrand: defaultBrand || undefined,
+      defaultCurrency: defaultCurrency || undefined,
+    });
+  }, [rows, headerRowIndex, mapping, defaultSupplier, defaultBrand, defaultCurrency]);
+
+  const priceColCount = mapping.filter((m) => m.role === "price").length;
+  const hasSupplierCol = mapping.some((m) => m.role === "supplier");
+  const hasBrandCol = mapping.some((m) => m.role === "brand");
+
   const handleCompare = async () => {
-    if (!csvText.trim()) return;
+    if (!built || built.offers.length === 0) return;
     setComparing(true);
     setResult(null);
     setImported(null);
+    const csv = offersToCsv(built.offers);
     const res = await fetch("/api/offers/compare", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ csv: csvText }),
+      body: JSON.stringify({ csv }),
     });
     const data = await res.json();
     setComparing(false);
@@ -67,12 +153,13 @@ export default function ImportCheckPage() {
   };
 
   const handleImport = async () => {
-    if (!csvText.trim()) return;
+    if (!built || built.offers.length === 0) return;
     setImporting(true);
+    const csv = offersToCsv(built.offers);
     const res = await fetch("/api/offers/import", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ csv: csvText }),
+      body: JSON.stringify({ csv }),
     });
     const data = await res.json();
     setImporting(false);
@@ -81,70 +168,218 @@ export default function ImportCheckPage() {
 
   const filteredRows = result ? result.rows.filter((r) => filter === "all" || r.verdict === filter) : [];
 
+  const headerRowPreview = rows.slice(0, Math.min(10, rows.length));
+
   return (
     <div className="space-y-6">
       <section>
         <h1 className="text-2xl font-semibold">Check New Prices</h1>
         <p className="mt-1 text-sm text-gray-500">
-          Upload a new supplier price list (same CSV format as regular import) to see which
-          items would be cheaper, higher, or new compared to what&apos;s already on file — before
-          committing anything to the database.
+          Upload a supplier price list in whatever format it comes in — Excel (.xlsx/.xls) or
+          CSV/text with any delimiter and any column headers. Columns are detected automatically;
+          confirm or correct the mapping below before comparing or importing.
         </p>
       </section>
 
       <section className="rounded-xl border border-gray-200 bg-white p-6">
-        <p className="mb-3 text-sm text-gray-500">
-          Headers: <code>supplier, brand, product, sku, price, currency, rrp, moq,
-          leadTimeDays, paymentTerms, region, notes</code>. Only supplier, brand, product, and
-          price are required.
-        </p>
         <input
           type="file"
-          accept=".csv,text/csv"
+          accept=".csv,.tsv,.txt,.xlsx,.xls,text/csv"
           onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])}
-          className="mb-3 block text-sm"
+          className="block text-sm"
         />
-        <textarea
-          className="input h-32 w-full font-mono text-xs"
-          placeholder="Paste CSV here, or upload a file above"
-          value={csvText}
-          onChange={(e) => {
-            setCsvText(e.target.value);
-            setResult(null);
-            setImported(null);
-          }}
-        />
-        <div className="mt-3 flex items-center gap-3">
-          <button
-            onClick={handleCompare}
-            disabled={comparing || !csvText.trim()}
-            className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-700 disabled:opacity-50"
-          >
-            {comparing ? "Comparing…" : "Compare"}
-          </button>
-          {result && result.rows.length > 0 && (
-            <button
-              onClick={handleImport}
-              disabled={importing || imported !== null}
-              className="rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50"
-            >
-              {importing ? "Importing…" : imported !== null ? "Imported" : "Import these offers"}
-            </button>
-          )}
-          {imported !== null && (
-            <span className="text-sm text-gray-600">Imported {imported} offer(s).</span>
-          )}
-        </div>
-        {result && result.errors.length > 0 && (
-          <ul className="mt-2 list-disc pl-5 text-xs text-red-600">
-            {result.errors.slice(0, 10).map((e, i) => (
-              <li key={i}>
-                Line {e.line}: {e.message}
-              </li>
-            ))}
-          </ul>
-        )}
+        {fileName && <p className="mt-2 text-xs text-gray-500">Loaded: {fileName}</p>}
+        {readError && <p className="mt-2 text-sm text-red-600">{readError}</p>}
       </section>
+
+      {rows.length > 0 && (
+        <section className="rounded-xl border border-gray-200 bg-white p-6 space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Header row</label>
+            <p className="mt-1 text-xs text-gray-500">
+              We picked the row that looks most like column headers. Change it if that&apos;s wrong.
+            </p>
+            <select
+              className="input mt-2 w-full max-w-2xl font-mono text-xs"
+              value={headerRowIndex}
+              onChange={(e) => handleHeaderRowChange(Number(e.target.value))}
+            >
+              {headerRowPreview.map((r, i) => (
+                <option key={i} value={i}>
+                  Row {i + 1}: {r.slice(0, 6).join(" | ")}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Column mapping</label>
+            <p className="mt-1 text-xs text-gray-500">
+              Auto-detected from the header text. Fix anything that&apos;s wrong — required fields are
+              supplier, brand, product, and price.
+            </p>
+            <div className="mt-2 overflow-x-auto rounded-lg border border-gray-200">
+              <table className="w-full text-left text-sm">
+                <thead className="border-b border-gray-200 bg-gray-50 text-xs uppercase text-gray-500">
+                  <tr>
+                    <th className="px-3 py-2">Column header</th>
+                    <th className="px-3 py-2">Sample value</th>
+                    <th className="px-3 py-2">Maps to</th>
+                    {priceColCount > 1 && !hasSupplierCol && <th className="px-3 py-2">Supplier label</th>}
+                  </tr>
+                </thead>
+                <tbody>
+                  {mapping.map((col) => {
+                    const sample = rows[headerRowIndex + 1]?.[col.index] ?? "";
+                    return (
+                      <tr key={col.index} className="border-b border-gray-100 last:border-0">
+                        <td className="px-3 py-2 font-medium">{col.header || `Column ${col.index + 1}`}</td>
+                        <td className="px-3 py-2 text-gray-500">{sample}</td>
+                        <td className="px-3 py-2">
+                          <select
+                            className="input text-xs"
+                            value={col.role}
+                            onChange={(e) => setRole(col.index, e.target.value as ColumnRole)}
+                          >
+                            {ROLE_OPTIONS.map((r) => (
+                              <option key={r} value={r}>
+                                {ROLE_LABELS[r]}
+                              </option>
+                            ))}
+                          </select>
+                        </td>
+                        {priceColCount > 1 && !hasSupplierCol && (
+                          <td className="px-3 py-2">
+                            {col.role === "price" && (
+                              <input
+                                className="input text-xs"
+                                placeholder={col.header}
+                                value={col.supplierLabel ?? ""}
+                                onChange={(e) => setSupplierLabel(col.index, e.target.value)}
+                              />
+                            )}
+                          </td>
+                        )}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            {priceColCount > 1 && !hasSupplierCol && (
+              <p className="mt-2 text-xs text-blue-600">
+                Multiple price columns and no supplier column detected — treating this as one row per
+                product with one price column per supplier. Edit the supplier labels above if the
+                column headers aren&apos;t the supplier names.
+              </p>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            {!hasSupplierCol && priceColCount <= 1 && (
+              <div>
+                <label className="block text-xs font-medium text-gray-700">Default supplier (no supplier column found)</label>
+                <input
+                  className="input mt-1 w-full text-sm"
+                  value={defaultSupplier}
+                  onChange={(e) => setDefaultSupplier(e.target.value)}
+                  placeholder="e.g. Huda Beauty Distributor"
+                />
+              </div>
+            )}
+            {!hasBrandCol && (
+              <div>
+                <label className="block text-xs font-medium text-gray-700">Default brand (no brand column found)</label>
+                <input
+                  className="input mt-1 w-full text-sm"
+                  value={defaultBrand}
+                  onChange={(e) => setDefaultBrand(e.target.value)}
+                  placeholder="e.g. Huda Beauty"
+                />
+              </div>
+            )}
+            <div>
+              <label className="block text-xs font-medium text-gray-700">Default currency</label>
+              <input
+                className="input mt-1 w-full text-sm"
+                value={defaultCurrency}
+                onChange={(e) => setDefaultCurrency(e.target.value)}
+                placeholder="EUR"
+              />
+            </div>
+          </div>
+
+          {built && (
+            <div className="rounded-lg bg-gray-50 p-4 text-sm">
+              <p>
+                <span className="font-semibold">{built.offers.length}</span> offer(s) ready to compare
+                {built.errors.length > 0 && (
+                  <span className="text-amber-600"> · {built.errors.length} row(s) skipped</span>
+                )}
+              </p>
+              {built.errors.length > 0 && (
+                <ul className="mt-2 list-disc pl-5 text-xs text-amber-700">
+                  {built.errors.slice(0, 8).map((e, i) => (
+                    <li key={i}>
+                      Line {e.line}: {e.message}
+                    </li>
+                  ))}
+                  {built.errors.length > 8 && <li>…and {built.errors.length - 8} more</li>}
+                </ul>
+              )}
+              {built.offers.length > 0 && (
+                <div className="mt-3 overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="text-gray-400">
+                      <tr>
+                        <th className="pr-4 py-1">Supplier</th>
+                        <th className="pr-4 py-1">Brand</th>
+                        <th className="pr-4 py-1">Product</th>
+                        <th className="pr-4 py-1">Price</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {built.offers.slice(0, 5).map((o, i) => (
+                        <tr key={i} className="text-gray-600">
+                          <td className="pr-4 py-1">{o.supplier}</td>
+                          <td className="pr-4 py-1">{o.brand}</td>
+                          <td className="pr-4 py-1">{o.product}</td>
+                          <td className="pr-4 py-1">
+                            {o.price.toFixed(2)} {o.currency}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {built.offers.length > 5 && (
+                    <p className="mt-1 text-gray-400">…and {built.offers.length - 5} more</p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="flex items-center gap-3">
+            <button
+              onClick={handleCompare}
+              disabled={comparing || !built || built.offers.length === 0}
+              className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-700 disabled:opacity-50"
+            >
+              {comparing ? "Comparing…" : "Compare against current offers"}
+            </button>
+            {result && result.rows.length > 0 && (
+              <button
+                onClick={handleImport}
+                disabled={importing || imported !== null}
+                className="rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50"
+              >
+                {importing ? "Importing…" : imported !== null ? "Imported" : "Import these offers"}
+              </button>
+            )}
+            {imported !== null && <span className="text-sm text-gray-600">Imported {imported} offer(s).</span>}
+          </div>
+        </section>
+      )}
 
       {result && (
         <section className="space-y-4">
