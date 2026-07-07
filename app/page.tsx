@@ -184,6 +184,24 @@ export default function DashboardPage() {
     setCsvText(text);
   };
 
+  const [fixingBrands, setFixingBrands] = useState(false);
+  const [fixResult, setFixResult] = useState<{ fixed: number; brands: string[] } | null>(null);
+
+  const handleFixBrands = async () => {
+    setFixingBrands(true);
+    setFixResult(null);
+    const res = await fetch("/api/admin/fix-brands", { method: "POST" });
+    const data = await res.json();
+    setFixingBrands(false);
+    setFixResult(data);
+    if (data.fixed > 0) {
+      load();
+      fetch("/api/brands")
+        .then((r) => r.json())
+        .then((d) => setBrands(Array.isArray(d) ? d : []));
+    }
+  };
+
   return (
     <div className="space-y-10">
       <section>
@@ -192,6 +210,35 @@ export default function DashboardPage() {
           Every offer you&apos;ve logged, across every supplier. Add one manually or import a
           batch via CSV below.
         </p>
+      </section>
+
+      <section className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <h2 className="text-sm font-medium text-amber-900">
+              Fix numeric brand names from import
+            </h2>
+            <p className="mt-1 text-xs text-amber-700">
+              A few source sheets had misaligned columns, leaving a barcode number in the brand
+              field for a handful of rows. This looks them up by source sheet and corrects the
+              brand name. Safe to run any time — it&apos;s a no-op once everything is fixed.
+            </p>
+          </div>
+          <button
+            onClick={handleFixBrands}
+            disabled={fixingBrands}
+            className="shrink-0 rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700 disabled:opacity-50"
+          >
+            {fixingBrands ? "Fixing…" : "Fix now"}
+          </button>
+        </div>
+        {fixResult && (
+          <p className="mt-2 text-xs text-amber-800">
+            {fixResult.fixed > 0
+              ? `Fixed ${fixResult.fixed} offer(s) across brand(s): ${fixResult.brands.join(", ")}.`
+              : "No numeric brand names found — nothing to fix."}
+          </p>
+        )}
       </section>
 
       <section className="rounded-xl border border-gray-200 bg-white p-6">

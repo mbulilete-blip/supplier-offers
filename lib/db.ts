@@ -146,6 +146,27 @@ export async function listBrands(): Promise<{ brand: string; count: number }[]> 
   return rows.map((r) => ({ brand: r.brand, count: r.count }));
 }
 
+// One-off data-repair helper: a handful of source sheets had misaligned
+// columns during the original import, which left a barcode number sitting
+// in the "brand" field instead of the real brand name. Every imported row
+// stores its origin sheet as "Source: <sheet name>" in `notes`, and that
+// sheet name is what should have been used as the brand — so this rewrites
+// any purely-numeric brand back to the correct sheet-derived name. Safe to
+// run more than once: once no numeric brands remain, it's a no-op.
+export async function fixNumericBrands(): Promise<{ fixed: number; brands: string[] }> {
+  await ensureSchema();
+  const { rows } = await getPool().query(
+    `UPDATE offers
+       SET brand = trim(regexp_replace(notes, '^Source: ', '')),
+           updated_at = now()
+     WHERE brand ~ '^[0-9]+$'
+       AND notes ~ '^Source: '
+     RETURNING brand;`
+  );
+  const brands = Array.from(new Set(rows.map((r) => r.brand as string))).sort();
+  return { fixed: rows.length, brands };
+}
+
 export async function createOffer(input: OfferInput): Promise<Offer> {
   await ensureSchema();
   const { rows } = await getPool().query(
