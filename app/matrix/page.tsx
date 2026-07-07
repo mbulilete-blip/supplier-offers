@@ -11,6 +11,17 @@ type Offer = {
   price: number;
   currency: string;
   rrp: number | null;
+  createdAt: string;
+};
+
+const isToday = (iso: string): boolean => {
+  const d = new Date(iso);
+  const now = new Date();
+  return (
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate()
+  );
 };
 
 // One brand's worth of offers can be safely pulled in one request (see
@@ -52,8 +63,11 @@ export default function MatrixPage() {
   const { products, suppliers, cellPrice } = useMemo(() => {
     const supplierSet = new Set<string>();
     const productMap = new Map<string, { product: string; sku: string | null }>();
-    // key -> supplier -> {price, currency, rrp}
-    const cells = new Map<string, Map<string, { price: number; currency: string; rrp: number | null }>>();
+    // key -> supplier -> {price, currency, rrp, createdAt}
+    const cells = new Map<
+      string,
+      Map<string, { price: number; currency: string; rrp: number | null; createdAt: string }>
+    >();
 
     for (const o of offers) {
       const key = (o.sku ? `${o.product}__${o.sku}` : o.product).toLowerCase();
@@ -62,9 +76,15 @@ export default function MatrixPage() {
       if (!cells.has(key)) cells.set(key, new Map());
       const bySupplier = cells.get(key)!;
       const existing = bySupplier.get(o.supplier);
-      // If duplicates exist for the same product+supplier, keep the lower price.
+      // If duplicates exist for the same product+supplier (e.g. the same
+      // price list imported more than once), keep the lower price.
       if (!existing || o.price < existing.price) {
-        bySupplier.set(o.supplier, { price: o.price, currency: o.currency, rrp: o.rrp });
+        bySupplier.set(o.supplier, {
+          price: o.price,
+          currency: o.currency,
+          rrp: o.rrp,
+          createdAt: o.createdAt,
+        });
       }
     }
 
@@ -116,19 +136,19 @@ export default function MatrixPage() {
 
       {!loading && brand && products.length > 0 && (
         <div className="overflow-auto rounded-xl border border-gray-200 bg-white">
-          <table className="text-left text-sm">
-            <thead className="border-b border-gray-200 bg-gray-50 text-xs uppercase text-gray-500">
+          <table className="text-left text-xs">
+            <thead className="border-b border-gray-200 bg-gray-50 uppercase tracking-wide text-gray-500">
               <tr>
-                <th className="sticky left-0 z-10 bg-gray-50 px-4 py-3">Product</th>
+                <th className="sticky left-0 z-10 bg-gray-50 px-3 py-2">Product</th>
                 {suppliers.map((s) => (
-                  <th key={s} className="px-4 py-3 whitespace-nowrap">
+                  <th key={s} className="px-3 py-2 text-right whitespace-nowrap">
                     {s}
                   </th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {products.map((p) => {
+              {products.map((p, rowIdx) => {
                 const bySupplier = cellPrice.get(p.key);
                 let bestSupplier: string | null = null;
                 let bestPrice = Infinity;
@@ -141,22 +161,38 @@ export default function MatrixPage() {
                   }
                 }
                 return (
-                  <tr key={p.key} className="border-b border-gray-100 last:border-0">
-                    <td className="sticky left-0 z-10 bg-white px-4 py-3 font-medium">
+                  <tr
+                    key={p.key}
+                    className={`border-b border-gray-100 last:border-0 hover:bg-gray-50 ${
+                      rowIdx % 2 === 1 ? "bg-gray-50/40" : ""
+                    }`}
+                  >
+                    <td className="sticky left-0 z-10 bg-inherit px-3 py-1.5 font-medium">
                       {p.product}
-                      {p.sku && <div className="text-xs text-gray-400">{p.sku}</div>}
+                      {p.sku && <span className="ml-1.5 font-normal text-gray-400">{p.sku}</span>}
                     </td>
                     {suppliers.map((s) => {
                       const cell = bySupplier?.get(s);
                       const isBest = s === bestSupplier && bySupplier && bySupplier.size > 1;
+                      const addedToday = cell ? isToday(cell.createdAt) : false;
                       return (
                         <td
                           key={s}
-                          className={`px-4 py-3 whitespace-nowrap ${
+                          title={cell ? `Added ${new Date(cell.createdAt).toLocaleString()}` : undefined}
+                          className={`px-3 py-1.5 text-right tabular-nums whitespace-nowrap ${
                             isBest ? "bg-green-50 font-semibold text-green-700" : "text-gray-700"
                           }`}
                         >
-                          {cell ? `${cell.price.toFixed(2)} ${cell.currency}` : "—"}
+                          {cell ? (
+                            <>
+                              {cell.price.toFixed(2)} {cell.currency}
+                              {addedToday && (
+                                <span className="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-blue-500 align-middle" />
+                              )}
+                            </>
+                          ) : (
+                            "—"
+                          )}
                         </td>
                       );
                     })}
@@ -166,6 +202,11 @@ export default function MatrixPage() {
             </tbody>
           </table>
         </div>
+      )}
+      {!loading && brand && products.length > 0 && (
+        <p className="text-xs text-gray-400">
+          Hover any price to see when it was added. <span className="inline-block h-1.5 w-1.5 rounded-full bg-blue-500 align-middle" /> marks offers added today.
+        </p>
       )}
 
       {!loading && brand && products.length === 0 && (
