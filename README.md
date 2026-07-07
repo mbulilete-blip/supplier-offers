@@ -70,3 +70,4 @@ Settings → Deployment Protection), or adding a basic-auth check in `middleware
 
 Next.js 14 (App Router) + TypeScript + Tailwind, `pg` for Postgres access (no ORM —
 plain SQL in `lib/db.ts`), deployed on Vercel with Vercel Postgres (Neon) for storage.
+# supplier-offers
