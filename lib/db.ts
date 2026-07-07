@@ -109,16 +109,28 @@ export async function createOffer(input: OfferInput): Promise<Offer> {
   return mapRow(rows[0]);
 }
 
+// Insert many rows with a single multi-row INSERT statement per batch,
+// instead of one round-trip per row. This is what makes large CSV imports
+// (tens of thousands of rows) finish inside a serverless function's time
+// limit instead of timing out.
+const IMPORT_BATCH_SIZE = 1000;
+const COLS_PER_ROW = 12;
+
 export async function createOffers(inputs: OfferInput[]): Promise<number> {
   await ensureSchema();
   const pool = getPool();
   let count = 0;
-  for (const input of inputs) {
-    await pool.query(
-      `INSERT INTO offers
-         (supplier, brand, product, sku, price, currency, rrp, moq, lead_time_days, payment_terms, region, notes)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12);`,
-      [
+
+  for (let start = 0; start < inputs.length; start += IMPORT_BATCH_SIZE) {
+    const batch = inputs.slice(start, start + IMPORT_BATCH_SIZE);
+    const values: unknown[] = [];
+    const placeholders: string[] = [];
+
+    batch.forEach((input, idx) => {
+      const base = idx * COLS_PER_ROW;
+      const p = Array.from({ length: COLS_PER_ROW }, (_, k) => `$${base + k + 1}`);
+      placeholders.push(`(${p.join(",")})`);
+      values.push(
         input.supplier,
         input.brand,
         input.product,
@@ -130,11 +142,19 @@ export async function createOffers(inputs: OfferInput[]): Promise<number> {
         input.leadTimeDays ?? null,
         input.paymentTerms ?? null,
         input.region ?? null,
-        input.notes ?? null,
-      ]
+        input.notes ?? null
+      );
+    });
+
+    await pool.query(
+      `INSERT INTO offers
+         (supplier, brand, product, sku, price, currency, rrp, moq, lead_time_days, payment_terms, region, notes)
+       VALUES ${placeholders.join(",")};`,
+      values
     );
-    count++;
+    count += batch.length;
   }
+
   return count;
 }
 
