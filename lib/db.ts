@@ -172,12 +172,51 @@ export type MarketMatch = {
   createdAt: string;
 };
 
+// SKU/EAN/barcode is the most reliable match key when a new price list has
+// one, because it's the one field that's actually consistent across
+// suppliers even when brand/product text isn't (e.g. a supplier's own file
+// abbreviating "HUDA" for "Huda Beauty", or slightly different product
+// wording). Matched exact (trimmed, case-insensitive) against the existing
+// offers' sku column.
+export async function getMarketMatchesBySku(
+  skus: string[]
+): Promise<Map<string, MarketMatch[]>> {
+  const map = new Map<string, MarketMatch[]>();
+  const cleaned = Array.from(
+    new Set(skus.map((s) => s.trim().toLowerCase()).filter((s) => s !== ""))
+  );
+  if (cleaned.length === 0) return map;
+
+  await ensureSchema();
+  const { rows } = await getPool().query(
+    `SELECT o.sku, o.supplier, o.price, o.currency, o.rrp, o.created_at
+     FROM offers o
+     WHERE o.sku IS NOT NULL AND lower(trim(o.sku)) = ANY($1::text[]);`,
+    [cleaned]
+  );
+
+  for (const row of rows) {
+    const key = String(row.sku).trim().toLowerCase();
+    const list = map.get(key) ?? [];
+    list.push({
+      supplier: row.supplier,
+      price: Number(row.price),
+      currency: row.currency,
+      rrp: row.rrp === null ? null : Number(row.rrp),
+      createdAt: new Date(row.created_at).toISOString(),
+    });
+    map.set(key, list);
+  }
+
+  return map;
+}
+
 // For the "check new prices" upload-and-compare flow: given a list of
 // (brand, product) pairs from a freshly uploaded price list, find every
 // existing offer for those same brand+product combinations so the caller can
 // work out, per row, whether the new price beats what's already on file.
-// Matching is on brand+product only (not SKU) since SKU formatting varies
-// enough across supplier sheets that an exact match would miss real matches.
+// This is the fallback used when a row has no SKU to match on (see
+// getMarketMatchesBySku, which is preferred whenever a SKU is present).
 export async function getMarketMatches(
   pairs: { brand: string; product: string }[]
 ): Promise<Map<string, MarketMatch[]>> {

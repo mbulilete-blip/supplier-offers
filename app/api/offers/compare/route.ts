@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getMarketMatches } from "@/lib/db";
+import { getMarketMatches, getMarketMatchesBySku } from "@/lib/db";
 import { offersFromCsv } from "@/lib/csv";
 
 export const dynamic = "force-dynamic";
@@ -33,12 +33,19 @@ export async function POST(req: NextRequest) {
   const truncated = offers.length > MAX_COMPARE_ROWS;
   const rowsToCompare = offers.slice(0, MAX_COMPARE_ROWS);
 
+  // Prefer matching on SKU/EAN/barcode when the uploaded row has one — it's
+  // the one identifier that stays consistent even when a supplier's own
+  // brand/product text doesn't match what's already on file (e.g. "HUDA"
+  // vs. "Huda Beauty", or slightly different product wording). Fall back to
+  // brand+product text matching only for rows with no SKU.
+  const skus = rowsToCompare.map((o) => o.sku).filter((s): s is string => !!s && s.trim() !== "");
   const pairs = rowsToCompare.map((o) => ({ brand: o.brand, product: o.product }));
-  const matches = await getMarketMatches(pairs);
+  const [skuMatches, bpMatches] = await Promise.all([getMarketMatchesBySku(skus), getMarketMatches(pairs)]);
 
   const rows: CompareRow[] = rowsToCompare.map((o) => {
-    const key = `${o.brand.trim().toLowerCase()}|${o.product.trim().toLowerCase()}`;
-    const existing = matches.get(key) ?? [];
+    const skuKey = o.sku?.trim().toLowerCase();
+    const bpKey = `${o.brand.trim().toLowerCase()}|${o.product.trim().toLowerCase()}`;
+    const existing = (skuKey ? skuMatches.get(skuKey) : undefined) ?? bpMatches.get(bpKey) ?? [];
 
     const best = existing.reduce<{ supplier: string; price: number; currency: string } | null>(
       (acc, m) => (acc === null || m.price < acc.price ? { supplier: m.supplier, price: m.price, currency: m.currency } : acc),
