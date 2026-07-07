@@ -1,0 +1,176 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+
+type Offer = {
+  id: number;
+  supplier: string;
+  brand: string;
+  product: string;
+  sku: string | null;
+  price: number;
+  currency: string;
+  rrp: number | null;
+};
+
+// One brand's worth of offers can be safely pulled in one request (see
+// MAX_PAGE_SIZE in lib/db.ts) - this view is meant to show everything for a
+// single brand at once, laid out as a grid, so pagination would defeat the
+// point.
+const BRAND_FETCH_LIMIT = 5000;
+
+export default function MatrixPage() {
+  const [brands, setBrands] = useState<{ brand: string; count: number }[]>([]);
+  const [brand, setBrand] = useState("");
+  const [offers, setOffers] = useState<Offer[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [truncated, setTruncated] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/brands")
+      .then((r) => r.json())
+      .then((data) => setBrands(Array.isArray(data) ? data : []));
+  }, []);
+
+  useEffect(() => {
+    if (!brand) {
+      setOffers([]);
+      setTruncated(false);
+      return;
+    }
+    setLoading(true);
+    const params = new URLSearchParams({ brand, limit: String(BRAND_FETCH_LIMIT), page: "1" });
+    fetch(`/api/offers?${params.toString()}`)
+      .then((r) => r.json())
+      .then((data) => {
+        setOffers(data.offers ?? []);
+        setTruncated((data.total ?? 0) > (data.offers?.length ?? 0));
+        setLoading(false);
+      });
+  }, [brand]);
+
+  const { products, suppliers, cellPrice } = useMemo(() => {
+    const supplierSet = new Set<string>();
+    const productMap = new Map<string, { product: string; sku: string | null }>();
+    // key -> supplier -> {price, currency, rrp}
+    const cells = new Map<string, Map<string, { price: number; currency: string; rrp: number | null }>>();
+
+    for (const o of offers) {
+      const key = (o.sku ? `${o.product}__${o.sku}` : o.product).toLowerCase();
+      if (!productMap.has(key)) productMap.set(key, { product: o.product, sku: o.sku });
+      supplierSet.add(o.supplier);
+      if (!cells.has(key)) cells.set(key, new Map());
+      const bySupplier = cells.get(key)!;
+      const existing = bySupplier.get(o.supplier);
+      // If duplicates exist for the same product+supplier, keep the lower price.
+      if (!existing || o.price < existing.price) {
+        bySupplier.set(o.supplier, { price: o.price, currency: o.currency, rrp: o.rrp });
+      }
+    }
+
+    const productsSorted = Array.from(productMap.entries())
+      .map(([key, v]) => ({ key, ...v }))
+      .sort((a, b) => a.product.localeCompare(b.product));
+    const suppliersSorted = Array.from(supplierSet).sort();
+
+    return {
+      products: productsSorted,
+      suppliers: suppliersSorted,
+      cellPrice: cells,
+    };
+  }, [offers]);
+
+  return (
+    <div className="space-y-6">
+      <section>
+        <h1 className="text-2xl font-semibold">Price Matrix</h1>
+        <p className="mt-1 text-sm text-gray-500">
+          Pick a brand to see every product against every supplier side by side. The lowest
+          price in each row is highlighted.
+        </p>
+      </section>
+
+      <select
+        className="input w-72"
+        value={brand}
+        onChange={(e) => setBrand(e.target.value)}
+      >
+        <option value="">Select a brand…</option>
+        {brands.map((b) => (
+          <option key={b.brand} value={b.brand}>
+            {b.brand} ({b.count.toLocaleString()})
+          </option>
+        ))}
+      </select>
+
+      {!brand && <p className="text-sm text-gray-400">Choose a brand above to build the matrix.</p>}
+
+      {loading && <p className="text-sm text-gray-400">Loading…</p>}
+
+      {truncated && (
+        <p className="text-xs text-amber-600">
+          This brand has more offers than fit in one view ({BRAND_FETCH_LIMIT.toLocaleString()}{" "}
+          shown). Some rows may be incomplete.
+        </p>
+      )}
+
+      {!loading && brand && products.length > 0 && (
+        <div className="overflow-auto rounded-xl border border-gray-200 bg-white">
+          <table className="text-left text-sm">
+            <thead className="border-b border-gray-200 bg-gray-50 text-xs uppercase text-gray-500">
+              <tr>
+                <th className="sticky left-0 z-10 bg-gray-50 px-4 py-3">Product</th>
+                {suppliers.map((s) => (
+                  <th key={s} className="px-4 py-3 whitespace-nowrap">
+                    {s}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {products.map((p) => {
+                const bySupplier = cellPrice.get(p.key);
+                let bestSupplier: string | null = null;
+                let bestPrice = Infinity;
+                if (bySupplier) {
+                  for (const [s, v] of bySupplier.entries()) {
+                    if (v.price < bestPrice) {
+                      bestPrice = v.price;
+                      bestSupplier = s;
+                    }
+                  }
+                }
+                return (
+                  <tr key={p.key} className="border-b border-gray-100 last:border-0">
+                    <td className="sticky left-0 z-10 bg-white px-4 py-3 font-medium">
+                      {p.product}
+                      {p.sku && <div className="text-xs text-gray-400">{p.sku}</div>}
+                    </td>
+                    {suppliers.map((s) => {
+                      const cell = bySupplier?.get(s);
+                      const isBest = s === bestSupplier && bySupplier && bySupplier.size > 1;
+                      return (
+                        <td
+                          key={s}
+                          className={`px-4 py-3 whitespace-nowrap ${
+                            isBest ? "bg-green-50 font-semibold text-green-700" : "text-gray-700"
+                          }`}
+                        >
+                          {cell ? `${cell.price.toFixed(2)} ${cell.currency}` : "—"}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {!loading && brand && products.length === 0 && (
+        <p className="text-sm text-gray-400">No offers found for this brand.</p>
+      )}
+    </div>
+  );
+}

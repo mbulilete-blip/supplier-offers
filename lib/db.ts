@@ -79,6 +79,7 @@ function mapRow(row: any): Offer {
 export type ListOffersParams = {
   search?: string;
   brand?: string;
+  supplier?: string;
   limit?: number;
   offset?: number;
 };
@@ -93,7 +94,9 @@ export type ListOffersResult = {
 // thousands of rows (it was crashing the tab), so the API now always returns
 // a bounded page plus a total count for building pager controls.
 const DEFAULT_PAGE_SIZE = 100;
-const MAX_PAGE_SIZE = 2000;
+// High enough to pull every offer for a single brand in one shot (for the
+// price matrix view) without going back to a fully unpaginated table scan.
+const MAX_PAGE_SIZE = 5000;
 
 export async function listOffers(params: ListOffersParams = {}): Promise<ListOffersResult> {
   await ensureSchema();
@@ -103,6 +106,7 @@ export async function listOffers(params: ListOffersParams = {}): Promise<ListOff
   const offset = Math.max(params.offset ?? 0, 0);
   const search = params.search?.trim();
   const brand = params.brand?.trim();
+  const supplier = params.supplier?.trim();
 
   const conditions: string[] = [];
   const values: unknown[] = [];
@@ -110,6 +114,10 @@ export async function listOffers(params: ListOffersParams = {}): Promise<ListOff
   if (brand) {
     values.push(brand);
     conditions.push(`brand = $${values.length}`);
+  }
+  if (supplier) {
+    values.push(supplier);
+    conditions.push(`supplier = $${values.length}`);
   }
   if (search) {
     values.push(`%${search}%`);
@@ -144,6 +152,64 @@ export async function listBrands(): Promise<{ brand: string; count: number }[]> 
     `SELECT brand, COUNT(*)::int AS count FROM offers GROUP BY brand ORDER BY brand ASC;`
   );
   return rows.map((r) => ({ brand: r.brand, count: r.count }));
+}
+
+// Same idea, one row per distinct supplier - powers the "view one supplier"
+// filter.
+export async function listSuppliers(): Promise<{ supplier: string; count: number }[]> {
+  await ensureSchema();
+  const { rows } = await getPool().query(
+    `SELECT supplier, COUNT(*)::int AS count FROM offers GROUP BY supplier ORDER BY supplier ASC;`
+  );
+  return rows.map((r) => ({ supplier: r.supplier, count: r.count }));
+}
+
+export type MarketMatch = {
+  supplier: string;
+  price: number;
+  currency: string;
+  rrp: number | null;
+  createdAt: string;
+};
+
+// For the "check new prices" upload-and-compare flow: given a list of
+// (brand, product) pairs from a freshly uploaded price list, find every
+// existing offer for those same brand+product combinations so the caller can
+// work out, per row, whether the new price beats what's already on file.
+// Matching is on brand+product only (not SKU) since SKU formatting varies
+// enough across supplier sheets that an exact match would miss real matches.
+export async function getMarketMatches(
+  pairs: { brand: string; product: string }[]
+): Promise<Map<string, MarketMatch[]>> {
+  const map = new Map<string, MarketMatch[]>();
+  if (pairs.length === 0) return map;
+
+  await ensureSchema();
+  const brands = pairs.map((p) => p.brand.trim().toLowerCase());
+  const products = pairs.map((p) => p.product.trim().toLowerCase());
+
+  const { rows } = await getPool().query(
+    `SELECT o.supplier, o.brand, o.product, o.price, o.currency, o.rrp, o.created_at
+     FROM offers o
+     JOIN (SELECT unnest($1::text[]) AS brand, unnest($2::text[]) AS product) AS keys
+       ON lower(o.brand) = keys.brand AND lower(o.product) = keys.product;`,
+    [brands, products]
+  );
+
+  for (const row of rows) {
+    const key = `${String(row.brand).trim().toLowerCase()}|${String(row.product).trim().toLowerCase()}`;
+    const list = map.get(key) ?? [];
+    list.push({
+      supplier: row.supplier,
+      price: Number(row.price),
+      currency: row.currency,
+      rrp: row.rrp === null ? null : Number(row.rrp),
+      createdAt: new Date(row.created_at).toISOString(),
+    });
+    map.set(key, list);
+  }
+
+  return map;
 }
 
 // One-off data-repair helper: a handful of source sheets had misaligned

@@ -56,6 +56,10 @@ export default function DashboardPage() {
   const [brands, setBrands] = useState<{ brand: string; count: number }[]>([]);
   const [brand, setBrand] = useState("");
 
+  // Same idea for suppliers - lets the user view only one supplier's offers.
+  const [suppliers, setSuppliers] = useState<{ supplier: string; count: number }[]>([]);
+  const [supplier, setSupplier] = useState("");
+
   const [csvText, setCsvText] = useState("");
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<{
@@ -63,17 +67,24 @@ export default function DashboardPage() {
     errors: { line: number; message: string }[];
   } | null>(null);
 
-  const load = async (opts?: { page?: number; search?: string; brand?: string }) => {
+  const load = async (opts?: {
+    page?: number;
+    search?: string;
+    brand?: string;
+    supplier?: string;
+  }) => {
     setLoading(true);
     const targetPage = opts?.page ?? page;
     const targetSearch = opts?.search ?? search;
     const targetBrand = opts?.brand ?? brand;
+    const targetSupplier = opts?.supplier ?? supplier;
     const params = new URLSearchParams({
       page: String(targetPage),
       limit: String(PAGE_SIZE),
     });
     if (targetSearch) params.set("search", targetSearch);
     if (targetBrand) params.set("brand", targetBrand);
+    if (targetSupplier) params.set("supplier", targetSupplier);
     const res = await fetch(`/api/offers?${params.toString()}`);
     const data = await res.json();
     setOffers(data.offers ?? []);
@@ -98,6 +109,9 @@ export default function DashboardPage() {
     fetch("/api/brands")
       .then((r) => r.json())
       .then((data) => setBrands(Array.isArray(data) ? data : []));
+    fetch("/api/suppliers")
+      .then((r) => r.json())
+      .then((data) => setSuppliers(Array.isArray(data) ? data : []));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -105,6 +119,12 @@ export default function DashboardPage() {
     setBrand(value);
     setPage(1);
     load({ page: 1, brand: value });
+  };
+
+  const handleSupplierChange = (value: string) => {
+    setSupplier(value);
+    setPage(1);
+    load({ page: 1, supplier: value });
   };
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
@@ -411,6 +431,20 @@ export default function DashboardPage() {
               {brands.map((b) => (
                 <option key={b.brand} value={b.brand}>
                   {b.brand} ({b.count.toLocaleString()})
+                </option>
+              ))}
+            </select>
+            <select
+              className="input w-56"
+              value={supplier}
+              onChange={(e) => handleSupplierChange(e.target.value)}
+            >
+              <option value="">
+                All suppliers ({suppliers.reduce((sum, s) => sum + s.count, 0).toLocaleString()})
+              </option>
+              {suppliers.map((s) => (
+                <option key={s.supplier} value={s.supplier}>
+                  {s.supplier} ({s.count.toLocaleString()})
                 </option>
               ))}
             </select>
