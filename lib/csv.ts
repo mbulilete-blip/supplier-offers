@@ -130,6 +130,8 @@ export function offersFromCsv(text: string): CsvImportResult {
       leadTimeDays: int(get("leadtimedays") ?? get("lead time days") ?? get("lead_time_days")) ?? null,
       paymentTerms: str(get("paymentterms") ?? get("payment terms") ?? get("payment_terms")) ?? null,
       region: str(get("region")) ?? null,
+      incoterm: str(get("incoterm")) ?? null,
+      marketOrigin: str(get("marketorigin") ?? get("market origin") ?? get("market_origin")) ?? null,
       notes: str(get("notes")) ?? null,
     });
   }

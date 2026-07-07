@@ -21,6 +21,8 @@ export type ColumnRole =
   | "leadTimeDays"
   | "paymentTerms"
   | "region"
+  | "incoterm"
+  | "marketOrigin"
   | "extra";
 
 export const ROLE_LABELS: Record<ColumnRole, string> = {
@@ -36,6 +38,8 @@ export const ROLE_LABELS: Record<ColumnRole, string> = {
   leadTimeDays: "Lead time (days)",
   paymentTerms: "Payment terms",
   region: "Region",
+  incoterm: "Incoterm / shipping terms (e.g. EXW)",
+  marketOrigin: "EU / Non-EU origin",
   extra: "Extra (kept as note)",
 };
 
@@ -63,14 +67,18 @@ const KEYWORDS: Partial<Record<ColumnRole, string[]>> = {
   paymentTerms: ["payment terms", "payment", "terms"],
   region: ["region", "market", "country", "territory"],
   currency: ["currency", "curr", "moneda"],
-  price: ["price", "cost", "rate", "precio", "importe", "wholesale", "offer", "exw", "fob"],
+  // Incoterm / shipping-term columns (often just "EXW" or "FOB" with a
+  // location as the value, like the Huda Beauty file's "EXW" -> "DUBAI").
+  incoterm: ["incoterm", "exw", "fob", "ddp", "cif", "fca", "cpt", "terms of sale", "shipping terms"],
+  marketOrigin: ["eu goods", "non eu", "non-eu", "eu stock", "market origin", "eu origin", "eu/non eu"],
+  price: ["price", "cost", "rate", "precio", "importe", "wholesale", "offer"],
   product: ["product", "description", "name", "article", "item", "title"],
 };
 
 // Order matters: more specific/identifying roles are matched before the
 // generic ones (product/price), so e.g. "Price Offer" doesn't get treated
-// as a product just because it contains no product keyword, and "Barcode"
-// isn't mistaken for a generic text column.
+// as a product just because it contains no product keyword, and "EXW"
+// isn't mistaken for a second price column.
 const ROLE_PRIORITY: ColumnRole[] = [
   "sku",
   "brand",
@@ -81,6 +89,8 @@ const ROLE_PRIORITY: ColumnRole[] = [
   "paymentTerms",
   "region",
   "currency",
+  "incoterm",
+  "marketOrigin",
   "price",
   "product",
 ];
@@ -289,9 +299,24 @@ function str(v: string | undefined): string | undefined {
 // ---------------------------------------------------------------------------
 
 export type BuildOptions = {
-  defaultSupplier?: string;
+  // Confirmed by the user before comparing/importing (e.g. via an "ask me
+  // which supplier this list is from" prompt). Takes priority over whatever
+  // is in a detected supplier column, so naming stays consistent across
+  // uploads from the same counterparty even if their own files label
+  // themselves differently from one file to the next.
+  supplierOverride?: string;
   defaultBrand?: string;
   defaultCurrency?: string;
+  // These typically don't vary row-to-row within one shipment/price list —
+  // an EXW batch is EXW for everything on the list, and it's either all EU
+  // stock or it isn't — so, like supplier, a confirmed value here wins over
+  // whatever a per-row column says.
+  incotermOverride?: string;
+  marketOriginOverride?: string;
+  // Lead time and MOQ genuinely can vary per product even within one list,
+  // so these only fill in when a row has no value of its own.
+  defaultLeadTimeDays?: number;
+  defaultMoq?: number;
 };
 
 export type BuildResult = {
@@ -323,6 +348,8 @@ export function buildOffersFromMapping(
   const leadCol = firstByRole("leadTimeDays");
   const paymentCol = firstByRole("paymentTerms");
   const regionCol = firstByRole("region");
+  const incotermCol = firstByRole("incoterm");
+  const marketOriginCol = firstByRole("marketOrigin");
   const extraCols = byRole("extra");
 
   const isWideFormat = priceCols.length > 1 && !supplierCol;
@@ -348,10 +375,17 @@ export function buildOffersFromMapping(
     const product = str(productCol ? r[productCol.index] : undefined);
     const sku = str(skuCol ? r[skuCol.index] : undefined) ?? null;
     const rrp = parseMoney(rrpCol ? r[rrpCol.index] : undefined) ?? null;
-    const moq = parseFirstInt(moqCol ? r[moqCol.index] : undefined) ?? null;
-    const leadTimeDays = parseFirstInt(leadCol ? r[leadCol.index] : undefined) ?? null;
+    const moq = parseFirstInt(moqCol ? r[moqCol.index] : undefined) ?? options.defaultMoq ?? null;
+    const leadTimeDays =
+      parseFirstInt(leadCol ? r[leadCol.index] : undefined) ?? options.defaultLeadTimeDays ?? null;
     const paymentTerms = str(paymentCol ? r[paymentCol.index] : undefined) ?? null;
     const region = str(regionCol ? r[regionCol.index] : undefined) ?? null;
+    const incoterm =
+      str(options.incotermOverride) ?? str(incotermCol ? r[incotermCol.index] : undefined) ?? null;
+    const marketOrigin =
+      str(options.marketOriginOverride) ??
+      str(marketOriginCol ? r[marketOriginCol.index] : undefined) ??
+      null;
     const notes = buildNotes(r) ?? null;
 
     if (!product) {
@@ -373,16 +407,34 @@ export function buildOffersFromMapping(
           str(currencyCol ? r[currencyCol.index] : undefined) ??
           options.defaultCurrency ??
           "EUR";
-        offers.push({ supplier, brand, product, sku, price, currency, rrp, moq, leadTimeDays, paymentTerms, region, notes });
+        offers.push({
+          supplier,
+          brand,
+          product,
+          sku,
+          price,
+          currency,
+          rrp,
+          moq,
+          leadTimeDays,
+          paymentTerms,
+          region,
+          incoterm,
+          marketOrigin,
+          notes,
+        });
       }
     } else {
       const priceCol = priceCols[0];
       const priceRaw = priceCol ? r[priceCol.index] : undefined;
       const price = parseMoney(priceRaw);
-      const supplier = str(supplierCol ? r[supplierCol.index] : undefined) ?? options.defaultSupplier;
+      // The confirmed supplier name wins over whatever a supplier column
+      // says, so uploads from the same counterparty stay consistently
+      // labeled even if their files don't.
+      const supplier = str(options.supplierOverride) ?? str(supplierCol ? r[supplierCol.index] : undefined);
 
       if (!supplier) {
-        errors.push({ line, message: "Missing supplier — row skipped (set a default supplier above to fix this)." });
+        errors.push({ line, message: "Missing supplier — row skipped (confirm the supplier name above to fix this)." });
         return;
       }
       if (price === undefined) {
@@ -396,7 +448,22 @@ export function buildOffersFromMapping(
         options.defaultCurrency ??
         "EUR";
 
-      offers.push({ supplier, brand, product, sku, price, currency, rrp, moq, leadTimeDays, paymentTerms, region, notes });
+      offers.push({
+        supplier,
+        brand,
+        product,
+        sku,
+        price,
+        currency,
+        rrp,
+        moq,
+        leadTimeDays,
+        paymentTerms,
+        region,
+        incoterm,
+        marketOrigin,
+        notes,
+      });
     }
   });
 
@@ -428,6 +495,8 @@ export function offersToCsv(offers: OfferInput[]): string {
         o.leadTimeDays ?? "",
         o.paymentTerms ?? "",
         o.region ?? "",
+        o.incoterm ?? "",
+        o.marketOrigin ?? "",
         o.notes ?? "",
       ]
         .map(escape)

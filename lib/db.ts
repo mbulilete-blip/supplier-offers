@@ -49,7 +49,15 @@ export function ensureSchema(): Promise<void> {
           notes TEXT,
           created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
           updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-        );`
+        );
+        -- Added later: Incoterm/shipping-term (e.g. "EXW Dubai") and an
+        -- EU / Non-EU origin flag. The latter matters for grey-market
+        -- compliance — parallel-import trademark exhaustion in the EU
+        -- depends on whether goods were first placed on the EU/EEA market
+        -- with the trademark owner's consent, so knowing whether a batch is
+        -- EU-origin or not is a real legal signal, not just metadata.
+        ALTER TABLE offers ADD COLUMN IF NOT EXISTS incoterm TEXT;
+        ALTER TABLE offers ADD COLUMN IF NOT EXISTS market_origin TEXT;`
       )
       .then(() => undefined);
   }
@@ -71,6 +79,8 @@ function mapRow(row: any): Offer {
     leadTimeDays: row.lead_time_days === null ? null : Number(row.lead_time_days),
     paymentTerms: row.payment_terms,
     region: row.region,
+    incoterm: row.incoterm,
+    marketOrigin: row.market_origin,
     notes: row.notes,
     createdAt: new Date(row.created_at).toISOString(),
   };
@@ -276,8 +286,8 @@ export async function createOffer(input: OfferInput): Promise<Offer> {
   await ensureSchema();
   const { rows } = await getPool().query(
     `INSERT INTO offers
-       (supplier, brand, product, sku, price, currency, rrp, moq, lead_time_days, payment_terms, region, notes)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+       (supplier, brand, product, sku, price, currency, rrp, moq, lead_time_days, payment_terms, region, incoterm, market_origin, notes)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
      RETURNING *;`,
     [
       input.supplier,
@@ -291,6 +301,8 @@ export async function createOffer(input: OfferInput): Promise<Offer> {
       input.leadTimeDays ?? null,
       input.paymentTerms ?? null,
       input.region ?? null,
+      input.incoterm ?? null,
+      input.marketOrigin ?? null,
       input.notes ?? null,
     ]
   );
@@ -302,7 +314,7 @@ export async function createOffer(input: OfferInput): Promise<Offer> {
 // (tens of thousands of rows) finish inside a serverless function's time
 // limit instead of timing out.
 const IMPORT_BATCH_SIZE = 1000;
-const COLS_PER_ROW = 12;
+const COLS_PER_ROW = 14;
 
 export async function createOffers(inputs: OfferInput[]): Promise<number> {
   await ensureSchema();
@@ -330,13 +342,15 @@ export async function createOffers(inputs: OfferInput[]): Promise<number> {
         input.leadTimeDays ?? null,
         input.paymentTerms ?? null,
         input.region ?? null,
+        input.incoterm ?? null,
+        input.marketOrigin ?? null,
         input.notes ?? null
       );
     });
 
     await pool.query(
       `INSERT INTO offers
-         (supplier, brand, product, sku, price, currency, rrp, moq, lead_time_days, payment_terms, region, notes)
+         (supplier, brand, product, sku, price, currency, rrp, moq, lead_time_days, payment_terms, region, incoterm, market_origin, notes)
        VALUES ${placeholders.join(",")};`,
       values
     );
@@ -365,6 +379,8 @@ export async function updateOffer(id: number, input: Partial<OfferInput>): Promi
     leadTimeDays: input.leadTimeDays !== undefined ? input.leadTimeDays : current.leadTimeDays,
     paymentTerms: input.paymentTerms !== undefined ? input.paymentTerms : current.paymentTerms,
     region: input.region !== undefined ? input.region : current.region,
+    incoterm: input.incoterm !== undefined ? input.incoterm : current.incoterm,
+    marketOrigin: input.marketOrigin !== undefined ? input.marketOrigin : current.marketOrigin,
     notes: input.notes !== undefined ? input.notes : current.notes,
   };
 
@@ -372,8 +388,8 @@ export async function updateOffer(id: number, input: Partial<OfferInput>): Promi
     `UPDATE offers SET
        supplier = $1, brand = $2, product = $3, sku = $4, price = $5, currency = $6,
        rrp = $7, moq = $8, lead_time_days = $9, payment_terms = $10, region = $11,
-       notes = $12, updated_at = now()
-     WHERE id = $13
+       incoterm = $12, market_origin = $13, notes = $14, updated_at = now()
+     WHERE id = $15
      RETURNING *;`,
     [
       merged.supplier,
@@ -387,6 +403,8 @@ export async function updateOffer(id: number, input: Partial<OfferInput>): Promi
       merged.leadTimeDays ?? null,
       merged.paymentTerms ?? null,
       merged.region ?? null,
+      merged.incoterm ?? null,
+      merged.marketOrigin ?? null,
       merged.notes ?? null,
       id,
     ]

@@ -59,8 +59,17 @@ const ROLE_OPTIONS: ColumnRole[] = [
   "leadTimeDays",
   "paymentTerms",
   "region",
+  "incoterm",
+  "marketOrigin",
   "extra",
 ];
+
+const MARKET_ORIGIN_OPTIONS = ["Unknown", "EU", "Non-EU"] as const;
+
+// Recognized Incoterm codes, used to build a nicer default guess like
+// "EXW Dubai" when the column header itself is the Incoterm code and the
+// cell value is just a location.
+const INCOTERM_CODE_RE = /^(exw|fob|fca|cpt|cip|dap|dpu|ddp|cif|fas|cfr)$/i;
 
 export default function ImportCheckPage() {
   const [fileName, setFileName] = useState<string | null>(null);
@@ -69,9 +78,24 @@ export default function ImportCheckPage() {
   const [mapping, setMapping] = useState<ColumnMapping[]>([]);
   const [readError, setReadError] = useState<string | null>(null);
 
-  const [defaultSupplier, setDefaultSupplier] = useState("");
+  // Confirmed by the user for every upload — takes priority over whatever a
+  // supplier column in the file says, so naming stays consistent across
+  // uploads from the same counterparty.
+  const [supplierName, setSupplierName] = useState("");
   const [defaultBrand, setDefaultBrand] = useState("");
   const [defaultCurrency, setDefaultCurrency] = useState("EUR");
+
+  // Same "confirm once, applies to the whole upload" treatment as supplier:
+  // shipping terms and EU/Non-EU origin are almost always uniform across an
+  // entire supplier price list, so an override beats any per-row column value.
+  const [incotermName, setIncotermName] = useState("");
+  const [marketOrigin, setMarketOrigin] = useState<(typeof MARKET_ORIGIN_OPTIONS)[number]>("Unknown");
+
+  // Lead time and MOQ vary more often row-to-row (different products can have
+  // different stock/lead times), so these are fallback defaults only — used
+  // when a row doesn't have its own value.
+  const [defaultLeadTimeDays, setDefaultLeadTimeDays] = useState("");
+  const [defaultMoq, setDefaultMoq] = useState("");
 
   const [comparing, setComparing] = useState(false);
   const [result, setResult] = useState<CompareResult | null>(null);
@@ -93,12 +117,38 @@ export default function ImportCheckPage() {
         return;
       }
       const hIdx = findHeaderRow(grid);
+      const detectedMapping = detectColumns(grid[hIdx]);
       setRows(grid);
       setHeaderRowIndex(hIdx);
-      setMapping(detectColumns(grid[hIdx]));
-      // Reasonable default: use the file name (minus extension/dates-ish
-      // noise) as a starting guess for supplier when the file has none.
-      setDefaultSupplier((prev) => prev || file.name.replace(/\.[^.]+$/, ""));
+      setMapping(detectedMapping);
+
+      // Ask for (pre-fill a guess at) the supplier for this list: prefer a
+      // detected supplier column's own value, otherwise fall back to the
+      // file name as a starting point — either way the user confirms it.
+      const supplierCol = detectedMapping.find((m) => m.role === "supplier");
+      const sampleSupplier = supplierCol ? grid[hIdx + 1]?.[supplierCol.index]?.trim() : "";
+      setSupplierName(sampleSupplier || file.name.replace(/\.[^.]+$/, ""));
+
+      // Pre-fill a guess at the Incoterm/shipping terms: if the column header
+      // is itself a known Incoterm code (e.g. "EXW"), pair it with the sample
+      // value (often just a city, e.g. "Dubai") for a friendlier default.
+      const incotermCol = detectedMapping.find((m) => m.role === "incoterm");
+      if (incotermCol) {
+        const header = incotermCol.header?.trim() ?? "";
+        const sample = grid[hIdx + 1]?.[incotermCol.index]?.trim() ?? "";
+        const guess = INCOTERM_CODE_RE.test(header) ? `${header.toUpperCase()} ${sample}`.trim() : sample;
+        setIncotermName(guess);
+      } else {
+        setIncotermName("");
+      }
+
+      const marketOriginCol = detectedMapping.find((m) => m.role === "marketOrigin");
+      const sampleOrigin = marketOriginCol
+        ? grid[hIdx + 1]?.[marketOriginCol.index]?.trim().toLowerCase()
+        : "";
+      if (sampleOrigin?.includes("non")) setMarketOrigin("Non-EU");
+      else if (sampleOrigin?.includes("eu")) setMarketOrigin("EU");
+      else setMarketOrigin("Unknown");
     } catch (err) {
       setReadError(err instanceof Error ? err.message : "Could not read this file.");
       setRows([]);
@@ -123,18 +173,37 @@ export default function ImportCheckPage() {
     setMapping((prev) => prev.map((m) => (m.index === index ? { ...m, supplierLabel: label } : m)));
   };
 
-  const built = useMemo(() => {
-    if (rows.length === 0 || mapping.length === 0) return null;
-    return buildOffersFromMapping(rows, headerRowIndex, mapping, {
-      defaultSupplier: defaultSupplier || undefined,
-      defaultBrand: defaultBrand || undefined,
-      defaultCurrency: defaultCurrency || undefined,
-    });
-  }, [rows, headerRowIndex, mapping, defaultSupplier, defaultBrand, defaultCurrency]);
-
   const priceColCount = mapping.filter((m) => m.role === "price").length;
   const hasSupplierCol = mapping.some((m) => m.role === "supplier");
   const hasBrandCol = mapping.some((m) => m.role === "brand");
+  const isWideFormat = priceColCount > 1 && !hasSupplierCol;
+
+  const built = useMemo(() => {
+    if (rows.length === 0 || mapping.length === 0) return null;
+    const leadTimeNum = defaultLeadTimeDays.trim() === "" ? undefined : Number(defaultLeadTimeDays);
+    const moqNum = defaultMoq.trim() === "" ? undefined : Number(defaultMoq);
+    return buildOffersFromMapping(rows, headerRowIndex, mapping, {
+      supplierOverride: isWideFormat ? undefined : supplierName || undefined,
+      defaultBrand: defaultBrand || undefined,
+      defaultCurrency: defaultCurrency || undefined,
+      incotermOverride: incotermName || undefined,
+      marketOriginOverride: marketOrigin === "Unknown" ? undefined : marketOrigin,
+      defaultLeadTimeDays: leadTimeNum !== undefined && Number.isFinite(leadTimeNum) ? leadTimeNum : undefined,
+      defaultMoq: moqNum !== undefined && Number.isFinite(moqNum) ? moqNum : undefined,
+    });
+  }, [
+    rows,
+    headerRowIndex,
+    mapping,
+    supplierName,
+    defaultBrand,
+    defaultCurrency,
+    isWideFormat,
+    incotermName,
+    marketOrigin,
+    defaultLeadTimeDays,
+    defaultMoq,
+  ]);
 
   const handleCompare = async () => {
     if (!built || built.offers.length === 0) return;
@@ -191,6 +260,64 @@ export default function ImportCheckPage() {
         {fileName && <p className="mt-2 text-xs text-gray-500">Loaded: {fileName}</p>}
         {readError && <p className="mt-2 text-sm text-red-600">{readError}</p>}
       </section>
+
+      {rows.length > 0 && !isWideFormat && (
+        <section className="rounded-xl border border-blue-200 bg-blue-50 p-6 space-y-4">
+          <div>
+            <label className="block text-sm font-semibold text-gray-800">Which supplier is this list from?</label>
+            <p className="mt-1 text-xs text-gray-600">
+              This name is used for every offer imported from this file, so it stays consistent with
+              your supplier records even if the file itself labels the supplier differently (or not at
+              all).
+            </p>
+            <input
+              className="input mt-3 w-full max-w-md text-sm"
+              value={supplierName}
+              onChange={(e) => setSupplierName(e.target.value)}
+              placeholder="e.g. Royal Luxury"
+            />
+            {hasSupplierCol && (
+              <p className="mt-2 text-xs text-gray-500">
+                We found a supplier column in the file — clear this field to use its values instead.
+              </p>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 border-t border-blue-100 pt-4">
+            <div>
+              <label className="block text-sm font-semibold text-gray-800">Shipping terms (Incoterm)</label>
+              <p className="mt-1 text-xs text-gray-600">
+                e.g. &quot;EXW Dubai&quot;, &quot;FOB Rotterdam&quot;, &quot;DDP&quot;. Applies to every row from this
+                file — matters for comparing true landed cost, not just sticker price.
+              </p>
+              <input
+                className="input mt-2 w-full text-sm"
+                value={incotermName}
+                onChange={(e) => setIncotermName(e.target.value)}
+                placeholder="e.g. EXW Dubai"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-semibold text-gray-800">EU / Non-EU origin</label>
+              <p className="mt-1 text-xs text-gray-600">
+                Was this stock placed on the EU/EEA market with the brand&apos;s consent? This is the
+                key fact for trademark-exhaustion risk on parallel imports into the EU.
+              </p>
+              <select
+                className="input mt-2 w-full text-sm"
+                value={marketOrigin}
+                onChange={(e) => setMarketOrigin(e.target.value as (typeof MARKET_ORIGIN_OPTIONS)[number])}
+              >
+                {MARKET_ORIGIN_OPTIONS.map((o) => (
+                  <option key={o} value={o}>
+                    {o}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+        </section>
+      )}
 
       {rows.length > 0 && (
         <section className="rounded-xl border border-gray-200 bg-white p-6 space-y-4">
@@ -276,17 +403,6 @@ export default function ImportCheckPage() {
           </div>
 
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-            {!hasSupplierCol && priceColCount <= 1 && (
-              <div>
-                <label className="block text-xs font-medium text-gray-700">Default supplier (no supplier column found)</label>
-                <input
-                  className="input mt-1 w-full text-sm"
-                  value={defaultSupplier}
-                  onChange={(e) => setDefaultSupplier(e.target.value)}
-                  placeholder="e.g. Huda Beauty Distributor"
-                />
-              </div>
-            )}
             {!hasBrandCol && (
               <div>
                 <label className="block text-xs font-medium text-gray-700">Default brand (no brand column found)</label>
@@ -307,7 +423,38 @@ export default function ImportCheckPage() {
                 placeholder="EUR"
               />
             </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-700">
+                Default lead time (days){" "}
+                <span className="font-normal text-gray-400">— fallback only</span>
+              </label>
+              <input
+                className="input mt-1 w-full text-sm"
+                type="number"
+                min={0}
+                value={defaultLeadTimeDays}
+                onChange={(e) => setDefaultLeadTimeDays(e.target.value)}
+                placeholder="e.g. 7"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-700">
+                Default MOQ <span className="font-normal text-gray-400">— fallback only</span>
+              </label>
+              <input
+                className="input mt-1 w-full text-sm"
+                type="number"
+                min={0}
+                value={defaultMoq}
+                onChange={(e) => setDefaultMoq(e.target.value)}
+                placeholder="e.g. 10"
+              />
+            </div>
           </div>
+          <p className="text-xs text-gray-400">
+            Lead time and MOQ defaults only fill in rows that don&apos;t already have their own value —
+            unlike supplier, Incoterm, and EU origin above, which apply to every row.
+          </p>
 
           {built && (
             <div className="rounded-lg bg-gray-50 p-4 text-sm">
