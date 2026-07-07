@@ -70,8 +70,18 @@ export default function MatrixPage() {
     >();
 
     for (const o of offers) {
-      const key = (o.sku ? `${o.product}__${o.sku}` : o.product).toLowerCase();
-      if (!productMap.has(key)) productMap.set(key, { product: o.product, sku: o.sku });
+      // Group by SKU/EAN alone when one is present - that's the real product
+      // identity. Suppliers often type the product name slightly differently
+      // (e.g. "OUD MINERALE 100ML" vs "OUD MINERALE EDP 100ML/3.4FLOZ") for
+      // the exact same EAN, and keying on product+SKU together was splitting
+      // those into separate rows, so a supplier's price looked missing when
+      // it was really just filed under a differently-worded row.
+      const key = (o.sku ? o.sku : o.product).trim().toLowerCase();
+      const existingProduct = productMap.get(key);
+      // Keep the longest/most descriptive product label seen for this key.
+      if (!existingProduct || o.product.length > existingProduct.product.length) {
+        productMap.set(key, { product: o.product, sku: o.sku });
+      }
       supplierSet.add(o.supplier);
       if (!cells.has(key)) cells.set(key, new Map());
       const bySupplier = cells.get(key)!;
