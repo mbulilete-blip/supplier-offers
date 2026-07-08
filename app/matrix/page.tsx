@@ -216,7 +216,7 @@ export default function MatrixPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [brand]);
 
-  const { products, suppliers, cellPrice, supplierLastUpdated } = useMemo(() => {
+  const { products, suppliers, cellPrice, supplierLastUpdated, bestSupplierRanking, contestedCount } = useMemo(() => {
     const supplierSet = new Set<string>();
     const productMap = new Map<string, { product: string; sku: string | null }>();
     // key -> supplier -> full offer (kept whole, not just a few fields, so a
@@ -266,11 +266,37 @@ export default function MatrixPage() {
       .sort((a, b) => a.product.localeCompare(b.product));
     const suppliersSorted = Array.from(supplierSet).sort();
 
+    // "Best supplier" tally for the summary panel: for every product quoted
+    // by more than one supplier (a "contested" product - anything with just
+    // one quote can't tell you who's cheaper), count who had the lowest
+    // price. A supplier winning most of these contested rows is the one
+    // worth leading price negotiations with for this brand.
+    const bestCounts = new Map<string, number>();
+    let contestedCount = 0;
+    for (const bySupplier of cells.values()) {
+      if (bySupplier.size < 2) continue;
+      contestedCount += 1;
+      let bestSupplier: string | null = null;
+      let bestPrice = Infinity;
+      for (const [s, o] of bySupplier.entries()) {
+        if (o.price < bestPrice) {
+          bestPrice = o.price;
+          bestSupplier = s;
+        }
+      }
+      if (bestSupplier) {
+        bestCounts.set(bestSupplier, (bestCounts.get(bestSupplier) ?? 0) + 1);
+      }
+    }
+    const bestSupplierRanking = Array.from(bestCounts.entries()).sort((a, b) => b[1] - a[1]);
+
     return {
       products: productsSorted,
       suppliers: suppliersSorted,
       cellPrice: cells,
       supplierLastUpdated: lastUpdated,
+      bestSupplierRanking,
+      contestedCount,
     };
   }, [offers]);
 
@@ -354,23 +380,63 @@ export default function MatrixPage() {
       {renameNotice && <p className="text-xs text-green-700">{renameNotice}</p>}
       {deleteNotice && <p className="text-xs text-green-700">{deleteNotice}</p>}
 
+      {!loading && brand && contestedCount > 0 && (
+        <div className="rounded-xl border border-green-200 bg-green-50 p-4">
+          <p className="text-xs font-medium uppercase tracking-wide text-green-700">
+            Best supplier for {brand}
+          </p>
+          <div className="mt-2 flex flex-wrap items-baseline gap-x-6 gap-y-2">
+            {bestSupplierRanking.slice(0, 3).map(([s, count], i) => (
+              <div key={s} className="flex items-baseline gap-1.5">
+                <span
+                  className={`text-sm font-semibold ${i === 0 ? "text-green-800" : "text-gray-500"}`}
+                >
+                  {i === 0 ? "🏆" : `#${i + 1}`} {s}
+                </span>
+                <span className="text-xs text-gray-500">
+                  lowest on {count}/{contestedCount} ({Math.round((count / contestedCount) * 100)}
+                  %)
+                </span>
+              </div>
+            ))}
+          </div>
+          <p className="mt-2 text-[11px] text-gray-500">
+            Based on products quoted by more than one supplier ({contestedCount} of{" "}
+            {products.length} products here). Single-supplier products aren&apos;t counted -
+            there&apos;s no price to compare them against.
+          </p>
+        </div>
+      )}
+
       {!loading && brand && products.length > 0 && (
         <>
           <p className="text-[11px] text-gray-400 sm:hidden">
             ← Swipe sideways to see more suppliers →
           </p>
           <div className="overflow-auto rounded-xl border border-gray-200 bg-white">
-            <table className="w-full text-left text-xs">
+            {/* table-fixed + colgroup gives every column a real, stable width
+                up front. With the old auto layout, a supplier name that could
+                wrap (to avoid overlapping the price column) let the browser
+                shrink that whole column down to fit just "-" placeholders in
+                the body, which then forced the header name to wrap one
+                letter per line. Fixed widths make that impossible. */}
+            <table className="table-fixed text-left text-xs">
+              <colgroup>
+                <col className="w-56" />
+                {suppliers.map((s) => (
+                  <col key={s} className="w-40" />
+                ))}
+              </colgroup>
               <thead className="border-b border-gray-200 bg-gray-50 uppercase tracking-wide text-gray-500">
                 <tr>
-                  <th className="sticky left-0 z-10 min-w-[180px] border-r border-gray-200 bg-gray-50 px-3 py-2 align-top">
+                  <th className="sticky left-0 z-10 border-r border-gray-200 bg-gray-50 px-3 py-2 align-top">
                     Product
                   </th>
                   {suppliers.map((s) => {
                     const updated = supplierLastUpdated.get(s);
                     const isRenaming = renamingSupplier === s;
                     return (
-                      <th key={s} className="min-w-[120px] px-3 py-2 text-right align-top">
+                      <th key={s} className="px-3 py-2 text-right align-top">
                         {isRenaming ? (
                           <div className="flex flex-col items-end gap-1 normal-case">
                             <input
@@ -406,8 +472,10 @@ export default function MatrixPage() {
                             )}
                           </div>
                         ) : (
-                          <div className="flex flex-wrap items-center justify-end gap-x-1 gap-y-0.5">
-                            <span className="whitespace-normal break-words">{s}</span>
+                          <div className="flex min-w-0 items-center justify-end gap-1">
+                            <span className="min-w-0 truncate" title={s}>
+                              {s}
+                            </span>
                             <span className="flex shrink-0 items-center gap-1">
                               <button
                                 onClick={() => startRename(s)}
@@ -463,7 +531,7 @@ export default function MatrixPage() {
                       <td
                         className={`sticky left-0 z-10 border-r border-gray-200 px-3 py-2 align-top font-medium group-hover:bg-gray-50 ${rowBg}`}
                       >
-                        <div className="max-w-[220px] truncate sm:max-w-[320px]" title={p.product}>
+                        <div className="truncate" title={p.product}>
                           {p.product}
                         </div>
                         {p.sku && (
