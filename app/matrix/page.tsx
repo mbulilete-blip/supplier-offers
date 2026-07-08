@@ -581,6 +581,17 @@ export default function MatrixPage() {
                         const cell = bySupplier?.get(s);
                         const isBest = s === bestSupplier && bySupplier && bySupplier.size > 1;
                         const addedToday = cell ? isToday(cell.createdAt) : false;
+                        // Discount vs RRP: always measured against the row's
+                        // one canonical RRP (p.rrp), not each offer's own rrp
+                        // field, so every supplier in a row is compared on
+                        // the same reference price - matching what the RRP
+                        // column itself shows. Falls back to the individual
+                        // offer's rrp only if the row has none at all.
+                        const referenceRrp = p.rrp ?? cell?.rrp ?? null;
+                        const discount =
+                          cell && referenceRrp && referenceRrp > 0
+                            ? ((referenceRrp - cell.price) / referenceRrp) * 100
+                            : null;
                         return (
                           <td
                             key={s}
@@ -595,6 +606,20 @@ export default function MatrixPage() {
                                 {cell.price.toFixed(2)} {cell.currency}
                                 {addedToday && (
                                   <span className="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-blue-500 align-middle" />
+                                )}
+                                {discount !== null && (
+                                  <div
+                                    className={`text-[10px] font-normal normal-case ${
+                                      discount > 0
+                                        ? isBest
+                                          ? "text-green-600"
+                                          : "text-gray-400"
+                                        : "text-red-400"
+                                    }`}
+                                  >
+                                    {discount > 0 ? "-" : "+"}
+                                    {Math.abs(discount).toFixed(0)}% vs RRP
+                                  </div>
                                 )}
                               </>
                             ) : (
@@ -613,12 +638,13 @@ export default function MatrixPage() {
       )}
       {!loading && brand && products.length > 0 && (
         <p className="text-xs text-gray-400">
-          RRP shown when at least one offer for that product includes one. &quot;Updated&quot;
-          under each supplier is when their most recent price for this brand was added. Click
-          any price to edit that offer, or hover the product name to see it in full. Next to a
-          supplier name, ✎ renames it everywhere (across every brand, not just this one), and 🗑
-          deletes all of that supplier&apos;s offers for this brand only. Hover a price for its
-          exact date.{" "}
+          RRP shown when at least one offer for that product includes one. Each price shows its
+          discount vs that row&apos;s RRP underneath - red means the price is above RRP.
+          &quot;Updated&quot; under each supplier is when their most recent price for this brand
+          was added. Click any price to edit that offer, or hover the product name to see it in
+          full. Next to a supplier name, ✎ renames it everywhere (across every brand, not just
+          this one), and 🗑 deletes all of that supplier&apos;s offers for this brand only. Hover
+          a price for its exact date.{" "}
           <span className="inline-block h-1.5 w-1.5 rounded-full bg-blue-500 align-middle" /> and
           blue text mark today.
         </p>
