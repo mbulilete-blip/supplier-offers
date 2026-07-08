@@ -218,7 +218,10 @@ export default function MatrixPage() {
 
   const { products, suppliers, cellPrice, supplierLastUpdated, bestSupplierRanking, contestedCount } = useMemo(() => {
     const supplierSet = new Set<string>();
-    const productMap = new Map<string, { product: string; sku: string | null }>();
+    const productMap = new Map<
+      string,
+      { product: string; sku: string | null; rrp: number | null; rrpCurrency: string | null; rrpAt: string | null }
+    >();
     // key -> supplier -> full offer (kept whole, not just a few fields, so a
     // cell can be clicked straight into the Edit modal for that exact offer).
     const cells = new Map<string, Map<string, Offer>>();
@@ -237,9 +240,27 @@ export default function MatrixPage() {
       const key = (o.sku ? o.sku : o.product).trim().toLowerCase();
       const existingProduct = productMap.get(key);
       // Keep the longest/most descriptive product label seen for this key.
-      if (!existingProduct || o.product.length > existingProduct.product.length) {
-        productMap.set(key, { product: o.product, sku: o.sku });
+      const product =
+        !existingProduct || o.product.length > existingProduct.product.length
+          ? o.product
+          : existingProduct.product;
+      const sku =
+        !existingProduct || o.product.length > existingProduct.product.length
+          ? o.sku
+          : existingProduct.sku;
+      // RRP is a product-level reference price, not a per-supplier one, but
+      // it only lives on individual offer rows - take whichever offer with
+      // an RRP was added most recently, so a corrected/updated RRP always
+      // wins over an older one.
+      let rrp = existingProduct?.rrp ?? null;
+      let rrpCurrency = existingProduct?.rrpCurrency ?? null;
+      let rrpAt = existingProduct?.rrpAt ?? null;
+      if (o.rrp != null && (!rrpAt || new Date(o.createdAt) > new Date(rrpAt))) {
+        rrp = o.rrp;
+        rrpCurrency = o.currency;
+        rrpAt = o.createdAt;
       }
+      productMap.set(key, { product, sku, rrp, rrpCurrency, rrpAt });
       supplierSet.add(o.supplier);
 
       const lastSeen = lastUpdated.get(o.supplier);
@@ -423,6 +444,7 @@ export default function MatrixPage() {
             <table className="table-fixed text-left text-xs">
               <colgroup>
                 <col className="w-56" />
+                <col className="w-24" />
                 {suppliers.map((s) => (
                   <col key={s} className="w-40" />
                 ))}
@@ -431,6 +453,9 @@ export default function MatrixPage() {
                 <tr>
                   <th className="sticky left-0 z-10 border-r border-gray-200 bg-gray-50 px-3 py-2 align-top">
                     Product
+                  </th>
+                  <th className="sticky left-56 z-10 border-r border-gray-200 bg-gray-50 px-3 py-2 text-right align-top">
+                    RRP
                   </th>
                   {suppliers.map((s) => {
                     const updated = supplierLastUpdated.get(s);
@@ -540,6 +565,18 @@ export default function MatrixPage() {
                           </div>
                         )}
                       </td>
+                      <td
+                        title={p.rrpAt ? `RRP as of ${new Date(p.rrpAt).toLocaleDateString()}` : undefined}
+                        className={`sticky left-56 z-10 border-r border-gray-200 px-3 py-2 text-right align-top tabular-nums text-gray-500 group-hover:bg-gray-50 ${rowBg}`}
+                      >
+                        {p.rrp != null ? (
+                          <>
+                            {p.rrp.toFixed(2)} {p.rrpCurrency}
+                          </>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
                       {suppliers.map((s) => {
                         const cell = bySupplier?.get(s);
                         const isBest = s === bestSupplier && bySupplier && bySupplier.size > 1;
@@ -576,11 +613,12 @@ export default function MatrixPage() {
       )}
       {!loading && brand && products.length > 0 && (
         <p className="text-xs text-gray-400">
-          &quot;Updated&quot; under each supplier is when their most recent price for this brand
-          was added. Click any price to edit that offer, or hover the product name to see it in
-          full. Next to a supplier name, ✎ renames it everywhere (across every brand, not just
-          this one), and 🗑 deletes all of that supplier&apos;s offers for this brand only. Hover a
-          price for its exact date.{" "}
+          RRP shown when at least one offer for that product includes one. &quot;Updated&quot;
+          under each supplier is when their most recent price for this brand was added. Click
+          any price to edit that offer, or hover the product name to see it in full. Next to a
+          supplier name, ✎ renames it everywhere (across every brand, not just this one), and 🗑
+          deletes all of that supplier&apos;s offers for this brand only. Hover a price for its
+          exact date.{" "}
           <span className="inline-block h-1.5 w-1.5 rounded-full bg-blue-500 align-middle" /> and
           blue text mark today.
         </p>
