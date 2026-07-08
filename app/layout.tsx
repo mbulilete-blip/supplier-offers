@@ -30,6 +30,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <Link href="/import-check" className="hover:text-gray-900">
                 Check New Prices
               </Link>
+              <Link href="/names" className="hover:text-gray-900">
+                Brands &amp; Suppliers
+              </Link>
             </nav>
           </div>
         </header>
