@@ -1,18 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-
-type Offer = {
-  id: number;
-  supplier: string;
-  brand: string;
-  product: string;
-  sku: string | null;
-  price: number;
-  currency: string;
-  rrp: number | null;
-  createdAt: string;
-};
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Offer } from "@/lib/types";
+import EditOfferModal from "@/components/EditOfferModal";
 
 type SupplierGroup = {
   canonical: string;
@@ -45,6 +35,7 @@ export default function HistoryPage() {
   const [offers, setOffers] = useState<Offer[]>([]);
   const [loading, setLoading] = useState(false);
   const [truncated, setTruncated] = useState(false);
+  const [editingOffer, setEditingOffer] = useState<Offer | null>(null);
 
   useEffect(() => {
     fetch("/api/suppliers?grouped=true")
@@ -65,7 +56,7 @@ export default function HistoryPage() {
     [supplierGroups, supplierGroup]
   );
 
-  useEffect(() => {
+  const fetchOffers = useCallback(() => {
     if (!selectedGroup) {
       setOffers([]);
       setTruncated(false);
@@ -88,6 +79,10 @@ export default function HistoryPage() {
         setLoading(false);
       });
   }, [selectedGroup, brand, search]);
+
+  useEffect(() => {
+    fetchOffers();
+  }, [fetchOffers]);
 
   const groups = useMemo(() => {
     // Group by SKU/EAN when present (the real product identity - see the
@@ -207,6 +202,7 @@ export default function HistoryPage() {
                     <th className="py-1.5 pr-4 font-medium">Price</th>
                     <th className="py-1.5 pr-4 font-medium">Change</th>
                     <th className="py-1.5 pr-4 font-medium">RRP</th>
+                    <th className="py-1.5 pr-4 font-medium"></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -238,6 +234,14 @@ export default function HistoryPage() {
                         <td className="py-1.5 pr-4 text-gray-500">
                           {o.rrp !== null ? `${o.rrp.toFixed(2)} ${o.currency}` : "—"}
                         </td>
+                        <td className="py-1.5 pr-4 text-right">
+                          <button
+                            onClick={() => setEditingOffer(o)}
+                            className="text-xs text-gray-500 hover:underline"
+                          >
+                            Edit
+                          </button>
+                        </td>
                       </tr>
                     );
                   })}
@@ -247,6 +251,17 @@ export default function HistoryPage() {
           );
         })}
       </div>
+
+      {editingOffer && (
+        <EditOfferModal
+          offer={editingOffer}
+          onClose={() => setEditingOffer(null)}
+          onSaved={() => {
+            setEditingOffer(null);
+            fetchOffers();
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -1,18 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-
-type Offer = {
-  id: number;
-  supplier: string;
-  brand: string;
-  product: string;
-  sku: string | null;
-  price: number;
-  currency: string;
-  rrp: number | null;
-  createdAt: string;
-};
+import { Offer } from "@/lib/types";
+import EditOfferModal from "@/components/EditOfferModal";
 
 const isToday = (iso: string): boolean => {
   const d = new Date(iso);
@@ -44,6 +34,7 @@ export default function MatrixPage() {
   const [offers, setOffers] = useState<Offer[]>([]);
   const [loading, setLoading] = useState(false);
   const [truncated, setTruncated] = useState(false);
+  const [editingOffer, setEditingOffer] = useState<Offer | null>(null);
 
   useEffect(() => {
     fetch("/api/brands")
@@ -51,7 +42,7 @@ export default function MatrixPage() {
       .then((data) => setBrands(Array.isArray(data) ? data : []));
   }, []);
 
-  useEffect(() => {
+  const fetchOffers = () => {
     if (!brand) {
       setOffers([]);
       setTruncated(false);
@@ -66,16 +57,19 @@ export default function MatrixPage() {
         setTruncated((data.total ?? 0) > (data.offers?.length ?? 0));
         setLoading(false);
       });
+  };
+
+  useEffect(() => {
+    fetchOffers();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [brand]);
 
   const { products, suppliers, cellPrice, supplierLastUpdated } = useMemo(() => {
     const supplierSet = new Set<string>();
     const productMap = new Map<string, { product: string; sku: string | null }>();
-    // key -> supplier -> {price, currency, rrp, createdAt}
-    const cells = new Map<
-      string,
-      Map<string, { price: number; currency: string; rrp: number | null; createdAt: string }>
-    >();
+    // key -> supplier -> full offer (kept whole, not just a few fields, so a
+    // cell can be clicked straight into the Edit modal for that exact offer).
+    const cells = new Map<string, Map<string, Offer>>();
     // Most recent createdAt seen for each supplier, across this brand's
     // offers - shown once in the column header instead of repeating a date
     // under every price.
@@ -111,12 +105,7 @@ export default function MatrixPage() {
       // no-longer-available price over a price the supplier actually quotes
       // today.
       if (!existing || new Date(o.createdAt) > new Date(existing.createdAt)) {
-        bySupplier.set(o.supplier, {
-          price: o.price,
-          currency: o.currency,
-          rrp: o.rrp,
-          createdAt: o.createdAt,
-        });
+        bySupplier.set(o.supplier, o);
       }
     }
 
@@ -223,10 +212,11 @@ export default function MatrixPage() {
                       return (
                         <td
                           key={s}
-                          title={cell ? `Added ${new Date(cell.createdAt).toLocaleString()}` : undefined}
+                          title={cell ? `Added ${new Date(cell.createdAt).toLocaleString()} - click to edit` : undefined}
+                          onClick={() => cell && setEditingOffer(cell)}
                           className={`px-3 py-1.5 text-right tabular-nums whitespace-nowrap ${
-                            isBest ? "bg-green-50 font-semibold text-green-700" : "text-gray-700"
-                          }`}
+                            cell ? "cursor-pointer hover:underline" : ""
+                          } ${isBest ? "bg-green-50 font-semibold text-green-700" : "text-gray-700"}`}
                         >
                           {cell ? (
                             <>
@@ -251,7 +241,7 @@ export default function MatrixPage() {
       {!loading && brand && products.length > 0 && (
         <p className="text-xs text-gray-400">
           &quot;Updated&quot; under each supplier is when their most recent price for this brand
-          was added. Hover any price for that specific offer&apos;s date.{" "}
+          was added. Click any price to edit that offer, or hover for its exact date.{" "}
           <span className="inline-block h-1.5 w-1.5 rounded-full bg-blue-500 align-middle" /> and
           blue text mark today.
         </p>
@@ -259,6 +249,17 @@ export default function MatrixPage() {
 
       {!loading && brand && products.length === 0 && (
         <p className="text-sm text-gray-400">No offers found for this brand.</p>
+      )}
+
+      {editingOffer && (
+        <EditOfferModal
+          offer={editingOffer}
+          onClose={() => setEditingOffer(null)}
+          onSaved={() => {
+            setEditingOffer(null);
+            fetchOffers();
+          }}
+        />
       )}
     </div>
   );

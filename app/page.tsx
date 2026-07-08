@@ -1,23 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-
-type Offer = {
-  id: number;
-  supplier: string;
-  brand: string;
-  product: string;
-  sku: string | null;
-  price: number;
-  currency: string;
-  rrp: number | null;
-  moq: number | null;
-  leadTimeDays: number | null;
-  paymentTerms: string | null;
-  region: string | null;
-  notes: string | null;
-  createdAt: string;
-};
+import { Offer } from "@/lib/types";
+import EditOfferModal from "@/components/EditOfferModal";
 
 const emptyForm = {
   supplier: "",
@@ -203,6 +188,8 @@ export default function DashboardPage() {
     const text = await file.text();
     setCsvText(text);
   };
+
+  const [editingOffer, setEditingOffer] = useState<Offer | null>(null);
 
   const [fixingBrands, setFixingBrands] = useState(false);
   const [fixResult, setFixResult] = useState<{ fixed: number; brands: string[] } | null>(null);
@@ -497,6 +484,12 @@ export default function DashboardPage() {
                   </td>
                   <td className="px-4 py-3 text-right">
                     <button
+                      onClick={() => setEditingOffer(o)}
+                      className="mr-3 text-xs text-gray-500 hover:underline"
+                    >
+                      Edit
+                    </button>
+                    <button
                       onClick={() => handleDelete(o.id)}
                       className="text-xs text-red-500 hover:underline"
                     >
@@ -539,6 +532,17 @@ export default function DashboardPage() {
           </div>
         </div>
       </section>
+
+      {editingOffer && (
+        <EditOfferModal
+          offer={editingOffer}
+          onClose={() => setEditingOffer(null)}
+          onSaved={() => {
+            setEditingOffer(null);
+            load();
+          }}
+        />
+      )}
     </div>
   );
 }

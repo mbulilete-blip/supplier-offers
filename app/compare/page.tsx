@@ -1,22 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-
-type Offer = {
-  id: number;
-  supplier: string;
-  brand: string;
-  product: string;
-  sku: string | null;
-  price: number;
-  currency: string;
-  rrp: number | null;
-  moq: number | null;
-  leadTimeDays: number | null;
-  paymentTerms: string | null;
-  region: string | null;
-  notes: string | null;
-};
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Offer } from "@/lib/types";
+import EditOfferModal from "@/components/EditOfferModal";
 
 // The table now holds tens of thousands of rows, so this page can no longer
 // fetch the whole thing on load (that's what was crashing the browser tab).
@@ -53,7 +39,7 @@ export default function ComparePage() {
     return () => clearTimeout(t);
   }, [searchInput]);
 
-  useEffect(() => {
+  const fetchOffers = useCallback(() => {
     if (search.length < MIN_SEARCH_LENGTH && !brand) {
       setOffers([]);
       setTruncated(false);
@@ -72,6 +58,12 @@ export default function ComparePage() {
         setLoading(false);
       });
   }, [search, brand]);
+
+  useEffect(() => {
+    fetchOffers();
+  }, [fetchOffers]);
+
+  const [editingOffer, setEditingOffer] = useState<Offer | null>(null);
 
   const handleBrandChange = (value: string) => {
     setBrand(value);
@@ -170,6 +162,7 @@ export default function ComparePage() {
                       <th className="py-2 pr-4">Terms</th>
                       <th className="py-2 pr-4">Region</th>
                       <th className="py-2 pr-4">Notes</th>
+                      <th className="py-2 pr-4"></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -205,6 +198,14 @@ export default function ComparePage() {
                           <td className="py-2 pr-4">{o.paymentTerms ?? "—"}</td>
                           <td className="py-2 pr-4">{o.region ?? "—"}</td>
                           <td className="py-2 pr-4 text-gray-500">{o.notes ?? "—"}</td>
+                          <td className="py-2 pr-4 text-right">
+                            <button
+                              onClick={() => setEditingOffer(o)}
+                              className="text-xs text-gray-500 hover:underline"
+                            >
+                              Edit
+                            </button>
+                          </td>
                         </tr>
                       );
                     })}
@@ -215,6 +216,17 @@ export default function ComparePage() {
           );
         })}
       </div>
+
+      {editingOffer && (
+        <EditOfferModal
+          offer={editingOffer}
+          onClose={() => setEditingOffer(null)}
+          onSaved={() => {
+            setEditingOffer(null);
+            fetchOffers();
+          }}
+        />
+      )}
     </div>
   );
 }
