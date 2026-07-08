@@ -4,31 +4,38 @@ import { useEffect, useState } from "react";
 import { Offer } from "@/lib/types";
 import EditOfferModal from "@/components/EditOfferModal";
 
-const emptyForm = {
-  supplier: "",
-  brand: "",
-  product: "",
-  sku: "",
-  price: "",
-  currency: "EUR",
-  rrp: "",
-  moq: "",
-  leadTimeDays: "",
-  paymentTerms: "",
-  region: "",
-  notes: "",
+const PAGE_SIZE = 100;
+
+type Stats = {
+  total: number;
+  suppliers: number;
+  brands: number;
+  addedToday: number;
+  addedThisWeek: number;
 };
 
-const PAGE_SIZE = 100;
+// Compact relative timestamp for the "Latest offers" panel - "2h ago" reads
+// faster than a full date when you're just checking what came in recently.
+const timeAgo = (iso: string): string => {
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diffMs / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d ago`;
+  return new Date(iso).toLocaleDateString();
+};
 
 export default function DashboardPage() {
   const [offers, setOffers] = useState<Offer[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
-  const [form, setForm] = useState(emptyForm);
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+
+  const [stats, setStats] = useState<Stats | null>(null);
+  const [recentOffers, setRecentOffers] = useState<Offer[]>([]);
 
   // searchInput tracks every keystroke; `search` is the debounced value that
   // actually triggers a (server-side, paginated) fetch, so typing doesn't
@@ -89,8 +96,18 @@ export default function DashboardPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchInput]);
 
+  const loadOverview = () => {
+    fetch("/api/dashboard/stats")
+      .then((r) => r.json())
+      .then((data) => setStats(data));
+    fetch("/api/offers/recent?limit=10")
+      .then((r) => r.json())
+      .then((data) => setRecentOffers(Array.isArray(data) ? data : []));
+  };
+
   useEffect(() => {
     load({ page: 1, search: "" });
+    loadOverview();
     fetch("/api/brands")
       .then((r) => r.json())
       .then((data) => setBrands(Array.isArray(data) ? data : []));
@@ -120,50 +137,11 @@ export default function DashboardPage() {
     load({ page: clamped });
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
-
-    if (!form.supplier || !form.brand || !form.product || !form.price) {
-      setError("Supplier, brand, product, and price are required.");
-      return;
-    }
-
-    setSubmitting(true);
-    const res = await fetch("/api/offers", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        supplier: form.supplier,
-        brand: form.brand,
-        product: form.product,
-        sku: form.sku || null,
-        price: Number(form.price),
-        currency: form.currency || "EUR",
-        rrp: form.rrp ? Number(form.rrp) : null,
-        moq: form.moq ? Number(form.moq) : null,
-        leadTimeDays: form.leadTimeDays ? Number(form.leadTimeDays) : null,
-        paymentTerms: form.paymentTerms || null,
-        region: form.region || null,
-        notes: form.notes || null,
-      }),
-    });
-    setSubmitting(false);
-
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      setError(data.error || "Something went wrong.");
-      return;
-    }
-
-    setForm(emptyForm);
-    load();
-  };
-
   const handleDelete = async (id: number) => {
     if (!confirm("Delete this offer?")) return;
     await fetch(`/api/offers/${id}`, { method: "DELETE" });
     load();
+    loadOverview();
   };
 
   const handleImport = async () => {
@@ -181,6 +159,7 @@ export default function DashboardPage() {
     if (data.imported > 0) {
       setCsvText("");
       load();
+      loadOverview();
     }
   };
 
@@ -203,6 +182,7 @@ export default function DashboardPage() {
     setFixResult(data);
     if (data.fixed > 0) {
       load();
+      loadOverview();
       fetch("/api/brands")
         .then((r) => r.json())
         .then((d) => setBrands(Array.isArray(d) ? d : []));
@@ -214,9 +194,73 @@ export default function DashboardPage() {
       <section>
         <h1 className="text-2xl font-semibold">All Offers</h1>
         <p className="mt-1 text-sm text-gray-500">
-          Every offer you&apos;ve logged, across every supplier. Add one manually or import a
-          batch via CSV below.
+          Every offer you&apos;ve logged, across every supplier. Import a batch via CSV below.
         </p>
+      </section>
+
+      <section className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+        {[
+          { label: "Total offers", value: stats?.total },
+          { label: "Suppliers", value: stats?.suppliers },
+          { label: "Brands", value: stats?.brands },
+          { label: "Added today", value: stats?.addedToday },
+          { label: "Added this week", value: stats?.addedThisWeek },
+        ].map((c) => (
+          <div key={c.label} className="rounded-xl border border-gray-200 bg-white p-4">
+            <div className="text-2xl font-semibold">
+              {c.value !== undefined ? c.value.toLocaleString() : "—"}
+            </div>
+            <div className="mt-0.5 text-xs text-gray-500">{c.label}</div>
+          </div>
+        ))}
+      </section>
+
+      <section className="rounded-xl border border-gray-200 bg-white p-6">
+        <h2 className="mb-4 text-lg font-medium">Latest offers</h2>
+        {recentOffers.length === 0 ? (
+          <p className="text-sm text-gray-400">No offers logged yet.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead className="border-b border-gray-200 text-xs uppercase text-gray-500">
+                <tr>
+                  <th className="py-2 pr-4 font-medium">Product</th>
+                  <th className="py-2 pr-4 font-medium">Brand</th>
+                  <th className="py-2 pr-4 font-medium">Supplier</th>
+                  <th className="py-2 pr-4 font-medium">Price</th>
+                  <th className="py-2 pr-4 font-medium">Added</th>
+                  <th className="py-2 pr-4 font-medium"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {recentOffers.map((o) => (
+                  <tr key={o.id} className="border-b border-gray-50 last:border-0">
+                    <td className="py-2 pr-4 font-medium">
+                      {o.product}
+                      {o.sku && <span className="ml-1.5 font-normal text-gray-400">{o.sku}</span>}
+                    </td>
+                    <td className="py-2 pr-4">{o.brand}</td>
+                    <td className="py-2 pr-4">{o.supplier}</td>
+                    <td className="py-2 pr-4 tabular-nums">
+                      {o.price.toFixed(2)} {o.currency}
+                    </td>
+                    <td className="py-2 pr-4 whitespace-nowrap text-gray-500">
+                      {timeAgo(o.createdAt)}
+                    </td>
+                    <td className="py-2 pr-4 text-right">
+                      <button
+                        onClick={() => setEditingOffer(o)}
+                        className="text-xs text-gray-500 hover:underline"
+                      >
+                        Edit
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </section>
 
       <section className="rounded-xl border border-amber-200 bg-amber-50 p-4">
@@ -249,113 +293,6 @@ export default function DashboardPage() {
               : "No numeric brand names found — nothing to fix."}
           </p>
         )}
-      </section>
-
-      <section className="rounded-xl border border-gray-200 bg-white p-6">
-        <h2 className="mb-4 text-lg font-medium">Add an offer</h2>
-        <form onSubmit={handleSubmit} className="grid grid-cols-2 gap-4 sm:grid-cols-3">
-          <Field label="Supplier *">
-            <input
-              className="input"
-              value={form.supplier}
-              onChange={(e) => setForm({ ...form, supplier: e.target.value })}
-            />
-          </Field>
-          <Field label="Brand *">
-            <input
-              className="input"
-              value={form.brand}
-              onChange={(e) => setForm({ ...form, brand: e.target.value })}
-            />
-          </Field>
-          <Field label="Product *">
-            <input
-              className="input"
-              value={form.product}
-              onChange={(e) => setForm({ ...form, product: e.target.value })}
-            />
-          </Field>
-          <Field label="SKU">
-            <input
-              className="input"
-              value={form.sku}
-              onChange={(e) => setForm({ ...form, sku: e.target.value })}
-            />
-          </Field>
-          <Field label="Price *">
-            <input
-              type="number"
-              step="0.01"
-              className="input"
-              value={form.price}
-              onChange={(e) => setForm({ ...form, price: e.target.value })}
-            />
-          </Field>
-          <Field label="Currency">
-            <input
-              className="input"
-              value={form.currency}
-              onChange={(e) => setForm({ ...form, currency: e.target.value })}
-            />
-          </Field>
-          <Field label="RRP">
-            <input
-              type="number"
-              step="0.01"
-              className="input"
-              value={form.rrp}
-              onChange={(e) => setForm({ ...form, rrp: e.target.value })}
-            />
-          </Field>
-          <Field label="MOQ">
-            <input
-              type="number"
-              className="input"
-              value={form.moq}
-              onChange={(e) => setForm({ ...form, moq: e.target.value })}
-            />
-          </Field>
-          <Field label="Lead time (days)">
-            <input
-              type="number"
-              className="input"
-              value={form.leadTimeDays}
-              onChange={(e) => setForm({ ...form, leadTimeDays: e.target.value })}
-            />
-          </Field>
-          <Field label="Payment terms">
-            <input
-              className="input"
-              value={form.paymentTerms}
-              onChange={(e) => setForm({ ...form, paymentTerms: e.target.value })}
-            />
-          </Field>
-          <Field label="Region">
-            <input
-              className="input"
-              value={form.region}
-              onChange={(e) => setForm({ ...form, region: e.target.value })}
-            />
-          </Field>
-          <Field label="Notes">
-            <input
-              className="input"
-              value={form.notes}
-              onChange={(e) => setForm({ ...form, notes: e.target.value })}
-            />
-          </Field>
-
-          <div className="col-span-2 flex items-center gap-3 sm:col-span-3">
-            <button
-              type="submit"
-              disabled={submitting}
-              className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-700 disabled:opacity-50"
-            >
-              {submitting ? "Adding…" : "Add offer"}
-            </button>
-            {error && <span className="text-sm text-red-600">{error}</span>}
-          </div>
-        </form>
       </section>
 
       <section className="rounded-xl border border-gray-200 bg-white p-6">
@@ -540,18 +477,10 @@ export default function DashboardPage() {
           onSaved={() => {
             setEditingOffer(null);
             load();
+            loadOverview();
           }}
         />
       )}
     </div>
-  );
-}
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <label className="block text-sm">
-      <span className="mb-1 block text-xs font-medium text-gray-500">{label}</span>
-      {children}
-    </label>
   );
 }

@@ -164,6 +164,49 @@ export async function listOffers(params: ListOffersParams = {}): Promise<ListOff
   return { offers: rows.map(mapRow), total };
 }
 
+export type DashboardStats = {
+  total: number;
+  suppliers: number;
+  brands: number;
+  addedToday: number;
+  addedThisWeek: number;
+};
+
+// Headline counts for the dashboard's overview cards - one query, so opening
+// the dashboard doesn't fire off five separate round trips.
+export async function getDashboardStats(): Promise<DashboardStats> {
+  await ensureSchema();
+  const { rows } = await getPool().query(
+    `SELECT
+       COUNT(*)::int AS total,
+       COUNT(DISTINCT supplier)::int AS suppliers,
+       COUNT(DISTINCT brand)::int AS brands,
+       COUNT(*) FILTER (WHERE created_at >= now() - interval '1 day')::int AS added_today,
+       COUNT(*) FILTER (WHERE created_at >= now() - interval '7 days')::int AS added_this_week
+     FROM offers;`
+  );
+  const r = rows[0] ?? {};
+  return {
+    total: r.total ?? 0,
+    suppliers: r.suppliers ?? 0,
+    brands: r.brands ?? 0,
+    addedToday: r.added_today ?? 0,
+    addedThisWeek: r.added_this_week ?? 0,
+  };
+}
+
+// Most recently added offers, newest first - powers the "Latest offers"
+// panel on the dashboard so what just came in is visible at a glance instead
+// of being buried in the full list (which sorts by product name, not date).
+export async function getRecentOffers(limit = 10): Promise<Offer[]> {
+  await ensureSchema();
+  const { rows } = await getPool().query(
+    `SELECT * FROM offers ORDER BY created_at DESC LIMIT $1;`,
+    [Math.min(Math.max(limit, 1), 100)]
+  );
+  return rows.map(mapRow);
+}
+
 // Distinct brand names + offer counts, used to power the "browse by brand"
 // dropdown/list in the UI instead of making users type a brand out by hand.
 export async function listBrands(): Promise<{ brand: string; count: number }[]> {
