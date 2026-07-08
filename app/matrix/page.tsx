@@ -31,6 +31,9 @@ const BRAND_FETCH_LIMIT = 5000;
 export default function MatrixPage() {
   const [brands, setBrands] = useState<{ brand: string; count: number }[]>([]);
   const [brand, setBrand] = useState("");
+  // Free-text filter over the brand dropdown - this list can run into the
+  // hundreds, so typing a few letters narrows it down instead of scrolling.
+  const [brandSearch, setBrandSearch] = useState("");
   const [offers, setOffers] = useState<Offer[]>([]);
   const [loading, setLoading] = useState(false);
   const [truncated, setTruncated] = useState(false);
@@ -197,6 +200,32 @@ export default function MatrixPage() {
   const [brandRenaming, setBrandRenaming] = useState(false);
   const [brandRenameError, setBrandRenameError] = useState<string | null>(null);
   const [brandRenameNotice, setBrandRenameNotice] = useState<string | null>(null);
+
+  const filteredBrands = useMemo(() => {
+    const q = brandSearch.trim().toLowerCase();
+    if (!q) return brands;
+    return brands.filter((b) => b.brand.toLowerCase().includes(q));
+  }, [brands, brandSearch]);
+
+  // Keep the currently selected brand in the option list even if it no
+  // longer matches the search text - otherwise typing after picking a brand
+  // would make the dropdown silently show no selection.
+  const brandDropdownOptions = useMemo(() => {
+    if (!brand || filteredBrands.some((b) => b.brand === brand)) return filteredBrands;
+    const current = brands.find((b) => b.brand === brand);
+    return current ? [current, ...filteredBrands] : filteredBrands;
+  }, [brand, brands, filteredBrands]);
+
+  const handleBrandSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    // Enter with exactly one match jumps straight to it, so a known brand
+    // name can be typed and confirmed without ever touching the dropdown.
+    if (e.key === "Enter" && filteredBrands.length === 1) {
+      setBrand(filteredBrands[0].brand);
+      setBrandSearch("");
+    } else if (e.key === "Escape") {
+      setBrandSearch("");
+    }
+  };
 
   const loadBrands = () => {
     fetch("/api/brands")
@@ -420,14 +449,34 @@ export default function MatrixPage() {
           {brandRenameError && <span className="text-xs text-red-600">{brandRenameError}</span>}
         </div>
       ) : (
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative">
+            <input
+              type="text"
+              className="input w-56"
+              placeholder="Search brands…"
+              value={brandSearch}
+              onChange={(e) => setBrandSearch(e.target.value)}
+              onKeyDown={handleBrandSearchKeyDown}
+            />
+            {brandSearch && (
+              <button
+                type="button"
+                onClick={() => setBrandSearch("")}
+                title="Clear search"
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-700"
+              >
+                ×
+              </button>
+            )}
+          </div>
           <select
             className="input w-72"
             value={brand}
             onChange={(e) => setBrand(e.target.value)}
           >
             <option value="">Select a brand…</option>
-            {brands.map((b) => (
+            {brandDropdownOptions.map((b) => (
               <option key={b.brand} value={b.brand}>
                 {b.brand} ({b.count.toLocaleString()})
               </option>
@@ -441,6 +490,12 @@ export default function MatrixPage() {
             >
               ✎ Rename brand
             </button>
+          )}
+          {brandSearch && (
+            <span className="text-xs text-gray-400">
+              {filteredBrands.length} of {brands.length} brand{brands.length === 1 ? "" : "s"}
+              {filteredBrands.length === 1 ? " - press Enter to select" : ""}
+            </span>
           )}
         </div>
       )}
