@@ -36,6 +36,34 @@ export default function MatrixPage() {
   const [truncated, setTruncated] = useState(false);
   const [editingOffer, setEditingOffer] = useState<Offer | null>(null);
 
+  // Drag-to-resize for the sticky Product column - default (224px) matches
+  // the old fixed w-56 class exactly, so nothing shifts until the user drags.
+  // The RRP column is also sticky and sits right after Product, so its left
+  // offset has to track this value live (see `style={{ left: productColWidth }}`
+  // below) instead of the old hardcoded `left-56` class.
+  const [productColWidth, setProductColWidth] = useState(224);
+
+  const startColResize = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = productColWidth;
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    const onMove = (moveEvent: MouseEvent) => {
+      const delta = moveEvent.clientX - startX;
+      const next = Math.min(480, Math.max(120, startWidth + delta));
+      setProductColWidth(next);
+    };
+    const onUp = () => {
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
+
   // Renaming a supplier straight from its column header - handy for fixing a
   // corrupted supplier value (e.g. a sheet/tab name that got used as the
   // literal supplier text on import) right where you spot it, without
@@ -443,7 +471,7 @@ export default function MatrixPage() {
                 letter per line. Fixed widths make that impossible. */}
             <table className="table-fixed text-left text-xs">
               <colgroup>
-                <col className="w-56" />
+                <col style={{ width: productColWidth }} />
                 <col className="w-24" />
                 {suppliers.map((s) => (
                   <col key={s} className="w-40" />
@@ -451,10 +479,18 @@ export default function MatrixPage() {
               </colgroup>
               <thead className="border-b border-gray-200 bg-gray-50 uppercase tracking-wide text-gray-500">
                 <tr>
-                  <th className="sticky left-0 z-10 border-r border-gray-200 bg-gray-50 px-3 py-2 align-top">
+                  <th className="sticky left-0 z-10 border-r border-gray-200 bg-gray-50 px-3 py-2 align-top relative">
                     Product
+                    <div
+                      onMouseDown={startColResize}
+                      title="Drag to resize"
+                      className="absolute right-0 top-0 z-20 h-full w-2 cursor-col-resize select-none hover:bg-gray-300 active:bg-gray-400"
+                    />
                   </th>
-                  <th className="sticky left-56 z-10 border-r border-gray-200 bg-gray-50 px-3 py-2 text-right align-top">
+                  <th
+                    className="sticky z-10 border-r border-gray-200 bg-gray-50 px-3 py-2 text-right align-top"
+                    style={{ left: productColWidth }}
+                  >
                     RRP
                   </th>
                   {suppliers.map((s) => {
@@ -567,7 +603,8 @@ export default function MatrixPage() {
                       </td>
                       <td
                         title={p.rrpAt ? `RRP as of ${new Date(p.rrpAt).toLocaleDateString()}` : undefined}
-                        className={`sticky left-56 z-10 border-r border-gray-200 px-3 py-2 text-right align-top tabular-nums text-gray-500 group-hover:bg-gray-50 ${rowBg}`}
+                        className={`sticky z-10 border-r border-gray-200 px-3 py-2 text-right align-top tabular-nums text-gray-500 group-hover:bg-gray-50 ${rowBg}`}
+                        style={{ left: productColWidth }}
                       >
                         {p.rrp != null ? (
                           <>
@@ -638,8 +675,9 @@ export default function MatrixPage() {
       )}
       {!loading && brand && products.length > 0 && (
         <p className="text-xs text-gray-400">
-          RRP shown when at least one offer for that product includes one. Each price shows its
-          discount vs that row&apos;s RRP underneath - red means the price is above RRP.
+          Drag the right edge of the Product column header to resize it. RRP shown when at least
+          one offer for that product includes one. Each price shows its discount vs that row&apos;s
+          RRP underneath - red means the price is above RRP.
           &quot;Updated&quot; under each supplier is when their most recent price for this brand
           was added. Click any price to edit that offer, or hover the product name to see it in
           full. Next to a supplier name, ✎ renames it everywhere (across every brand, not just
