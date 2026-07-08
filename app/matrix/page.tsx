@@ -355,147 +355,164 @@ export default function MatrixPage() {
       {deleteNotice && <p className="text-xs text-green-700">{deleteNotice}</p>}
 
       {!loading && brand && products.length > 0 && (
-        <div className="overflow-auto rounded-xl border border-gray-200 bg-white">
-          <table className="text-left text-xs">
-            <thead className="border-b border-gray-200 bg-gray-50 uppercase tracking-wide text-gray-500">
-              <tr>
-                <th className="sticky left-0 z-10 bg-gray-50 px-3 py-2">Product</th>
-                {suppliers.map((s) => {
-                  const updated = supplierLastUpdated.get(s);
-                  const isRenaming = renamingSupplier === s;
-                  return (
-                    <th key={s} className="px-3 py-2 text-right align-top">
-                      {isRenaming ? (
-                        <div className="flex flex-col items-end gap-1 normal-case">
-                          <input
-                            autoFocus
-                            className="input w-40 text-right text-xs"
-                            value={renameValue}
-                            onChange={(e) => setRenameValue(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") saveRename();
-                              if (e.key === "Escape") cancelRename();
-                            }}
-                          />
-                          <div className="flex gap-2">
-                            <button
-                              onClick={saveRename}
-                              disabled={renaming}
-                              className="text-[10px] font-medium text-gray-900 hover:underline disabled:opacity-50"
-                            >
-                              {renaming ? "Saving…" : "Save"}
-                            </button>
-                            <button
-                              onClick={cancelRename}
-                              disabled={renaming}
-                              className="text-[10px] text-gray-400 hover:underline"
-                            >
-                              Cancel
-                            </button>
-                          </div>
-                          {renameError && (
-                            <div className="max-w-[10rem] whitespace-normal text-[10px] text-red-600">
-                              {renameError}
+        <>
+          <p className="text-[11px] text-gray-400 sm:hidden">
+            ← Swipe sideways to see more suppliers →
+          </p>
+          <div className="overflow-auto rounded-xl border border-gray-200 bg-white">
+            <table className="w-full text-left text-xs">
+              <thead className="border-b border-gray-200 bg-gray-50 uppercase tracking-wide text-gray-500">
+                <tr>
+                  <th className="sticky left-0 z-10 min-w-[180px] border-r border-gray-200 bg-gray-50 px-3 py-2 align-top">
+                    Product
+                  </th>
+                  {suppliers.map((s) => {
+                    const updated = supplierLastUpdated.get(s);
+                    const isRenaming = renamingSupplier === s;
+                    return (
+                      <th key={s} className="min-w-[120px] px-3 py-2 text-right align-top">
+                        {isRenaming ? (
+                          <div className="flex flex-col items-end gap-1 normal-case">
+                            <input
+                              autoFocus
+                              className="input w-40 text-right text-xs"
+                              value={renameValue}
+                              onChange={(e) => setRenameValue(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") saveRename();
+                                if (e.key === "Escape") cancelRename();
+                              }}
+                            />
+                            <div className="flex gap-2">
+                              <button
+                                onClick={saveRename}
+                                disabled={renaming}
+                                className="text-[10px] font-medium text-gray-900 hover:underline disabled:opacity-50"
+                              >
+                                {renaming ? "Saving…" : "Save"}
+                              </button>
+                              <button
+                                onClick={cancelRename}
+                                disabled={renaming}
+                                className="text-[10px] text-gray-400 hover:underline"
+                              >
+                                Cancel
+                              </button>
                             </div>
-                          )}
-                        </div>
-                      ) : (
-                        <div className="flex items-center justify-end gap-1 whitespace-nowrap">
-                          <span>{s}</span>
-                          <button
-                            onClick={() => startRename(s)}
-                            title="Rename this supplier everywhere"
-                            className="text-gray-300 hover:text-gray-600"
+                            {renameError && (
+                              <div className="max-w-[10rem] whitespace-normal text-[10px] text-red-600">
+                                {renameError}
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="flex flex-wrap items-center justify-end gap-x-1 gap-y-0.5">
+                            <span className="whitespace-normal break-words">{s}</span>
+                            <span className="flex shrink-0 items-center gap-1">
+                              <button
+                                onClick={() => startRename(s)}
+                                title="Rename this supplier everywhere"
+                                className="text-gray-300 hover:text-gray-600"
+                              >
+                                ✎
+                              </button>
+                              <button
+                                onClick={() => deleteColumn(s)}
+                                disabled={deletingSupplier}
+                                title={`Delete all offers from "${s}" for ${brand}`}
+                                className="text-gray-300 hover:text-red-600 disabled:opacity-50"
+                              >
+                                🗑
+                              </button>
+                            </span>
+                          </div>
+                        )}
+                        {!isRenaming && updated && (
+                          <div
+                            className={`whitespace-nowrap text-[10px] font-normal normal-case ${
+                              isToday(updated) ? "text-blue-500" : "text-gray-400"
+                            }`}
                           >
-                            ✎
-                          </button>
-                          <button
-                            onClick={() => deleteColumn(s)}
-                            disabled={deletingSupplier}
-                            title={`Delete all offers from "${s}" for ${brand}`}
-                            className="text-gray-300 hover:text-red-600 disabled:opacity-50"
-                          >
-                            🗑
-                          </button>
-                        </div>
-                      )}
-                      {!isRenaming && updated && (
-                        <div
-                          className={`whitespace-nowrap text-[10px] font-normal normal-case ${
-                            isToday(updated) ? "text-blue-500" : "text-gray-400"
-                          }`}
-                        >
-                          Updated {shortDate(updated)}
-                        </div>
-                      )}
-                    </th>
-                  );
-                })}
-              </tr>
-            </thead>
-            <tbody>
-              {products.map((p, rowIdx) => {
-                const bySupplier = cellPrice.get(p.key);
-                let bestSupplier: string | null = null;
-                let bestPrice = Infinity;
-                if (bySupplier) {
-                  for (const [s, v] of bySupplier.entries()) {
-                    if (v.price < bestPrice) {
-                      bestPrice = v.price;
-                      bestSupplier = s;
+                            Updated {shortDate(updated)}
+                          </div>
+                        )}
+                      </th>
+                    );
+                  })}
+                </tr>
+              </thead>
+              <tbody>
+                {products.map((p, rowIdx) => {
+                  const bySupplier = cellPrice.get(p.key);
+                  let bestSupplier: string | null = null;
+                  let bestPrice = Infinity;
+                  if (bySupplier) {
+                    for (const [s, v] of bySupplier.entries()) {
+                      if (v.price < bestPrice) {
+                        bestPrice = v.price;
+                        bestSupplier = s;
+                      }
                     }
                   }
-                }
-                return (
-                  <tr
-                    key={p.key}
-                    className={`border-b border-gray-100 last:border-0 hover:bg-gray-50 ${
-                      rowIdx % 2 === 1 ? "bg-gray-50/40" : ""
-                    }`}
-                  >
-                    <td className="sticky left-0 z-10 bg-inherit px-3 py-1.5 font-medium">
-                      {p.product}
-                      {p.sku && <span className="ml-1.5 font-normal text-gray-400">{p.sku}</span>}
-                    </td>
-                    {suppliers.map((s) => {
-                      const cell = bySupplier?.get(s);
-                      const isBest = s === bestSupplier && bySupplier && bySupplier.size > 1;
-                      const addedToday = cell ? isToday(cell.createdAt) : false;
-                      return (
-                        <td
-                          key={s}
-                          title={cell ? `Added ${new Date(cell.createdAt).toLocaleString()} - click to edit` : undefined}
-                          onClick={() => cell && setEditingOffer(cell)}
-                          className={`px-3 py-1.5 text-right tabular-nums whitespace-nowrap ${
-                            cell ? "cursor-pointer hover:underline" : ""
-                          } ${isBest ? "bg-green-50 font-semibold text-green-700" : "text-gray-700"}`}
-                        >
-                          {cell ? (
-                            <>
-                              {cell.price.toFixed(2)} {cell.currency}
-                              {addedToday && (
-                                <span className="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-blue-500 align-middle" />
-                              )}
-                            </>
-                          ) : (
-                            "—"
-                          )}
-                        </td>
-                      );
-                    })}
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+                  const rowBg = rowIdx % 2 === 1 ? "bg-gray-50/60" : "bg-white";
+                  return (
+                    <tr
+                      key={p.key}
+                      className={`group border-b border-gray-100 last:border-0 hover:bg-gray-50 ${rowBg}`}
+                    >
+                      <td
+                        className={`sticky left-0 z-10 border-r border-gray-200 px-3 py-2 align-top font-medium group-hover:bg-gray-50 ${rowBg}`}
+                      >
+                        <div className="max-w-[220px] truncate sm:max-w-[320px]" title={p.product}>
+                          {p.product}
+                        </div>
+                        {p.sku && (
+                          <div className="mt-0.5 text-[11px] font-normal text-gray-400">
+                            {p.sku}
+                          </div>
+                        )}
+                      </td>
+                      {suppliers.map((s) => {
+                        const cell = bySupplier?.get(s);
+                        const isBest = s === bestSupplier && bySupplier && bySupplier.size > 1;
+                        const addedToday = cell ? isToday(cell.createdAt) : false;
+                        return (
+                          <td
+                            key={s}
+                            title={cell ? `Added ${new Date(cell.createdAt).toLocaleString()} - click to edit` : undefined}
+                            onClick={() => cell && setEditingOffer(cell)}
+                            className={`px-3 py-2 text-right align-top tabular-nums whitespace-nowrap ${
+                              cell ? "cursor-pointer hover:underline" : ""
+                            } ${isBest ? "bg-green-50 font-semibold text-green-700" : "text-gray-700"}`}
+                          >
+                            {cell ? (
+                              <>
+                                {cell.price.toFixed(2)} {cell.currency}
+                                {addedToday && (
+                                  <span className="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-blue-500 align-middle" />
+                                )}
+                              </>
+                            ) : (
+                              "—"
+                            )}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
       {!loading && brand && products.length > 0 && (
         <p className="text-xs text-gray-400">
           &quot;Updated&quot; under each supplier is when their most recent price for this brand
-          was added. Click any price to edit that offer. Next to a supplier name, ✎ renames it
-          everywhere (across every brand, not just this one), and 🗑 deletes all of that
-          supplier&apos;s offers for this brand only. Hover a price for its exact date.{" "}
+          was added. Click any price to edit that offer, or hover the product name to see it in
+          full. Next to a supplier name, ✎ renames it everywhere (across every brand, not just
+          this one), and 🗑 deletes all of that supplier&apos;s offers for this brand only. Hover a
+          price for its exact date.{" "}
           <span className="inline-block h-1.5 w-1.5 rounded-full bg-blue-500 align-middle" /> and
           blue text mark today.
         </p>
