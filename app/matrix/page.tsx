@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Offer } from "@/lib/types";
 import EditOfferModal from "@/components/EditOfferModal";
 
@@ -43,37 +43,58 @@ export default function MatrixPage() {
   // below) instead of the old hardcoded `left-56` class.
   const [productColWidth, setProductColWidth] = useState(224);
 
-  // Pointer Events + setPointerCapture instead of plain mouse events on
-  // `window`: capturing the pointer on the handle itself keeps every
-  // subsequent move/up event routed straight to it, even if the cursor
-  // slips off the 8px strip mid-drag (easy to do) or the browser would
-  // otherwise try to start a native drag/selection over the sticky table
-  // header. Plain window-level mousemove listeners were silently failing
-  // to track the drag in that situation.
-  const startColResize = (e: React.PointerEvent<HTMLDivElement>) => {
+  // Drag-to-resize state, tracked declaratively so cleanup can never be
+  // skipped. Earlier attempts wired mousedown/pointerdown to imperatively
+  // add + remove listeners inside one callback - if the matching "up" event
+  // was ever missed (e.g. a pointercancel instead of pointerup, or the
+  // browser eating it over the sticky table header), the cursor/user-select
+  // override and the listeners were left stuck forever, which is exactly
+  // what got reported. Driving this off a `resizing` boolean + useEffect
+  // means React's effect cleanup runs no matter how `resizing` goes back to
+  // false - mouseup, window blur, or even the component unmounting.
+  const [resizing, setResizing] = useState(false);
+  const dragStart = useRef<{ x: number; width: number } | null>(null);
+
+  const startColResize = (e: React.MouseEvent<HTMLDivElement>) => {
     e.preventDefault();
-    e.stopPropagation();
-    const handle = e.currentTarget;
-    handle.setPointerCapture(e.pointerId);
-    const startX = e.clientX;
-    const startWidth = productColWidth;
-    document.body.style.cursor = "col-resize";
-    document.body.style.userSelect = "none";
-    const onMove = (moveEvent: PointerEvent) => {
-      const delta = moveEvent.clientX - startX;
-      const next = Math.min(480, Math.max(120, startWidth + delta));
+    dragStart.current = { x: e.clientX, width: productColWidth };
+    setResizing(true);
+  };
+
+  useEffect(() => {
+    if (!resizing) return;
+    const onMove = (e: MouseEvent) => {
+      if (!dragStart.current) return;
+      const delta = e.clientX - dragStart.current.x;
+      const next = Math.min(480, Math.max(120, dragStart.current.width + delta));
       setProductColWidth(next);
     };
-    const onUp = (upEvent: PointerEvent) => {
-      handle.releasePointerCapture(upEvent.pointerId);
-      handle.removeEventListener("pointermove", onMove);
-      handle.removeEventListener("pointerup", onUp);
+    const stop = () => setResizing(false);
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", stop);
+    // Safety nets: if the mouse is released outside the window, or the
+    // window/tab loses focus mid-drag, still end the drag instead of
+    // leaving the cursor and listeners stuck.
+    window.addEventListener("blur", stop);
+    window.addEventListener("mouseleave", stop);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", stop);
+      window.removeEventListener("blur", stop);
+      window.removeEventListener("mouseleave", stop);
+      dragStart.current = null;
+    };
+  }, [resizing]);
+
+  useEffect(() => {
+    if (!resizing) return;
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    return () => {
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
     };
-    handle.addEventListener("pointermove", onMove);
-    handle.addEventListener("pointerup", onUp);
-  };
+  }, [resizing]);
 
   // Renaming a supplier straight from its column header - handy for fixing a
   // corrupted supplier value (e.g. a sheet/tab name that got used as the
@@ -493,10 +514,11 @@ export default function MatrixPage() {
                   <th className="sticky left-0 z-10 border-r border-gray-200 bg-gray-50 px-3 py-2 align-top relative">
                     Product
                     <div
-                      onPointerDown={startColResize}
+                      onMouseDown={startColResize}
                       title="Drag to resize"
-                      style={{ touchAction: "none" }}
-                      className="absolute -right-1 top-0 z-20 h-full w-3 cursor-col-resize select-none hover:bg-gray-300 active:bg-gray-400"
+                      className={`absolute -right-1 top-0 z-20 h-full w-3 cursor-col-resize select-none hover:bg-gray-300 ${
+                        resizing ? "bg-gray-400" : ""
+                      }`}
                     />
                   </th>
                   <th
