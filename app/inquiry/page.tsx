@@ -35,6 +35,21 @@ type MatchResponse = {
 
 const ROLE_OPTIONS: InquiryColumnRole[] = ["product", "brand", "sku", "qty", "ignore"];
 
+const isToday = (iso: string): boolean => {
+  const d = new Date(iso);
+  const now = new Date();
+  return (
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate()
+  );
+};
+
+const shortDate = (iso: string): string => {
+  if (isToday(iso)) return "Today";
+  return new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+};
+
 // Same clickable-price hover detail shown on the Compare page - MOQ, lead
 // time, terms, etc. don't fit in the results table, so they're a hover away
 // instead of forcing a click into the edit modal just to see them.
@@ -79,6 +94,7 @@ function buildResultsCsv(results: InquiryResultRow[]): string {
     "Supplier",
     "Price",
     "Currency",
+    "Added",
     "Best price",
     "RRP",
     "Discount vs RRP %",
@@ -95,7 +111,7 @@ function buildResultsCsv(results: InquiryResultRow[]): string {
   for (const { item, offers } of results) {
     if (offers.length === 0) {
       lines.push(
-        [item.product, item.brand ?? "", item.sku ?? "", item.qty ?? "", "No match found", "", "", "", "", "", "", "", "", "", "", "", ""]
+        [item.product, item.brand ?? "", item.sku ?? "", item.qty ?? "", "No match found", "", "", "", "", "", "", "", "", "", "", "", "", ""]
           .map(csvEscape)
           .join(",")
       );
@@ -114,6 +130,7 @@ function buildResultsCsv(results: InquiryResultRow[]): string {
           o.supplier,
           o.price.toFixed(2),
           o.currency,
+          new Date(o.createdAt).toLocaleDateString(),
           o.price === bestPrice ? "Yes" : "",
           o.rrp ?? "",
           discount,
@@ -454,6 +471,7 @@ export default function InquiryPage() {
                           <tr>
                             <th className="py-2 pr-4">Supplier</th>
                             <th className="py-2 pr-4">Price</th>
+                            <th className="py-2 pr-4">Added</th>
                             <th className="py-2 pr-4">Margin vs RRP</th>
                             <th className="py-2 pr-4">MOQ</th>
                             <th className="py-2 pr-4">Lead time</th>
@@ -485,6 +503,14 @@ export default function InquiryPage() {
                                   className="cursor-pointer py-2 pr-4 font-medium text-gray-900 hover:underline"
                                 >
                                   {o.price.toFixed(2)} {o.currency}
+                                </td>
+                                <td
+                                  title={new Date(o.createdAt).toLocaleString()}
+                                  className={`py-2 pr-4 whitespace-nowrap ${
+                                    isToday(o.createdAt) ? "text-blue-500" : "text-gray-500"
+                                  }`}
+                                >
+                                  {shortDate(o.createdAt)}
                                 </td>
                                 <td className="py-2 pr-4">{margin !== null ? `${margin.toFixed(0)}%` : "—"}</td>
                                 <td className="py-2 pr-4">{o.moq ?? "—"}</td>
