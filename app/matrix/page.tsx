@@ -503,7 +503,13 @@ export default function MatrixPage() {
                 letter per line. Fixed widths make that impossible. */}
             <table className="table-fixed text-left text-xs">
               <colgroup>
-                <col style={{ width: productColWidth }} />
+                {/* No width on this col - some browsers don't reliably
+                    relayout a fixed table when a <col>'s width is changed
+                    dynamically after first paint. Setting the width on the
+                    header <th> instead (below) is what the fixed-table
+                    layout algorithm actually uses when the col has none,
+                    and cells reflow normally like any other styled element. */}
+                <col />
                 <col className="w-24" />
                 {suppliers.map((s) => (
                   <col key={s} className="w-40" />
@@ -511,8 +517,14 @@ export default function MatrixPage() {
               </colgroup>
               <thead className="border-b border-gray-200 bg-gray-50 uppercase tracking-wide text-gray-500">
                 <tr>
-                  <th className="sticky left-0 z-10 border-r border-gray-200 bg-gray-50 px-3 py-2 align-top relative">
-                    Product
+                  <th
+                    className="sticky left-0 z-10 border-r border-gray-200 bg-gray-50 px-3 py-2 align-top relative"
+                    style={{ width: productColWidth, minWidth: productColWidth, maxWidth: productColWidth }}
+                  >
+                    Product{" "}
+                    <span className="font-normal normal-case text-gray-300">
+                      ({Math.round(productColWidth)}px)
+                    </span>
                     <div
                       onMouseDown={startColResize}
                       title="Drag to resize"
@@ -625,6 +637,7 @@ export default function MatrixPage() {
                     >
                       <td
                         className={`sticky left-0 z-10 border-r border-gray-200 px-3 py-2 align-top font-medium group-hover:bg-gray-50 ${rowBg}`}
+                        style={{ width: productColWidth, minWidth: productColWidth, maxWidth: productColWidth }}
                       >
                         <div className="truncate" title={p.product}>
                           {p.product}
