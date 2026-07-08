@@ -43,25 +43,36 @@ export default function MatrixPage() {
   // below) instead of the old hardcoded `left-56` class.
   const [productColWidth, setProductColWidth] = useState(224);
 
-  const startColResize = (e: React.MouseEvent) => {
+  // Pointer Events + setPointerCapture instead of plain mouse events on
+  // `window`: capturing the pointer on the handle itself keeps every
+  // subsequent move/up event routed straight to it, even if the cursor
+  // slips off the 8px strip mid-drag (easy to do) or the browser would
+  // otherwise try to start a native drag/selection over the sticky table
+  // header. Plain window-level mousemove listeners were silently failing
+  // to track the drag in that situation.
+  const startColResize = (e: React.PointerEvent<HTMLDivElement>) => {
     e.preventDefault();
+    e.stopPropagation();
+    const handle = e.currentTarget;
+    handle.setPointerCapture(e.pointerId);
     const startX = e.clientX;
     const startWidth = productColWidth;
     document.body.style.cursor = "col-resize";
     document.body.style.userSelect = "none";
-    const onMove = (moveEvent: MouseEvent) => {
+    const onMove = (moveEvent: PointerEvent) => {
       const delta = moveEvent.clientX - startX;
       const next = Math.min(480, Math.max(120, startWidth + delta));
       setProductColWidth(next);
     };
-    const onUp = () => {
+    const onUp = (upEvent: PointerEvent) => {
+      handle.releasePointerCapture(upEvent.pointerId);
+      handle.removeEventListener("pointermove", onMove);
+      handle.removeEventListener("pointerup", onUp);
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
     };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
+    handle.addEventListener("pointermove", onMove);
+    handle.addEventListener("pointerup", onUp);
   };
 
   // Renaming a supplier straight from its column header - handy for fixing a
@@ -482,9 +493,10 @@ export default function MatrixPage() {
                   <th className="sticky left-0 z-10 border-r border-gray-200 bg-gray-50 px-3 py-2 align-top relative">
                     Product
                     <div
-                      onMouseDown={startColResize}
+                      onPointerDown={startColResize}
                       title="Drag to resize"
-                      className="absolute right-0 top-0 z-20 h-full w-2 cursor-col-resize select-none hover:bg-gray-300 active:bg-gray-400"
+                      style={{ touchAction: "none" }}
+                      className="absolute -right-1 top-0 z-20 h-full w-3 cursor-col-resize select-none hover:bg-gray-300 active:bg-gray-400"
                     />
                   </th>
                   <th
