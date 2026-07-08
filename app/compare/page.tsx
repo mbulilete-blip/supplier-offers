@@ -4,6 +4,39 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Offer } from "@/lib/types";
 import EditOfferModal from "@/components/EditOfferModal";
 
+const isToday = (iso: string): boolean => {
+  const d = new Date(iso);
+  const now = new Date();
+  return (
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate()
+  );
+};
+
+const shortDate = (iso: string): string => {
+  if (isToday(iso)) return "Today";
+  return new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+};
+
+// Full-detail summary shown on hover over a price, so the MOQ/lead
+// time/terms/etc. that don't fit in the table are previewable without
+// opening the edit modal - only need to click through when you actually want
+// to change something.
+const offerTooltip = (o: Offer): string => {
+  const parts = [
+    `Added ${new Date(o.createdAt).toLocaleString()}`,
+    o.moq ? `MOQ ${o.moq}` : null,
+    o.leadTimeDays ? `Lead time ${o.leadTimeDays}d` : null,
+    o.paymentTerms ? `Terms: ${o.paymentTerms}` : null,
+    o.region ? `Region: ${o.region}` : null,
+    o.incoterm ? `Incoterm: ${o.incoterm}` : null,
+    o.marketOrigin ? `Origin: ${o.marketOrigin}` : null,
+    o.notes ? `Notes: ${o.notes}` : null,
+  ].filter(Boolean);
+  return `${parts.join(" · ")}\nClick to edit full details`;
+};
+
 // The table now holds tens of thousands of rows, so this page can no longer
 // fetch the whole thing on load (that's what was crashing the browser tab).
 // Comparison only makes sense for a specific product/brand/supplier/SKU
@@ -88,7 +121,8 @@ export default function ComparePage() {
         <h1 className="text-2xl font-semibold">Compare Offers</h1>
         <p className="mt-1 text-sm text-gray-500">
           Search for a product, brand, supplier, or SKU to compare offers side by side.
-          Lowest price per product is highlighted. Margin is calculated against RRP where
+          Lowest price per product is highlighted. Click any price to see the full offer -
+          MOQ, lead time, terms, region, notes. Margin is calculated against RRP where
           available.
         </p>
       </section>
@@ -156,6 +190,7 @@ export default function ComparePage() {
                     <tr>
                       <th className="py-2 pr-4">Supplier</th>
                       <th className="py-2 pr-4">Price</th>
+                      <th className="py-2 pr-4">Added</th>
                       <th className="py-2 pr-4">Margin vs RRP</th>
                       <th className="py-2 pr-4">MOQ</th>
                       <th className="py-2 pr-4">Lead time</th>
@@ -185,8 +220,20 @@ export default function ComparePage() {
                               </span>
                             )}
                           </td>
-                          <td className="py-2 pr-4">
+                          <td
+                            onClick={() => setEditingOffer(o)}
+                            title={offerTooltip(o)}
+                            className="cursor-pointer py-2 pr-4 font-medium text-gray-900 hover:underline"
+                          >
                             {o.price.toFixed(2)} {o.currency}
+                          </td>
+                          <td
+                            title={new Date(o.createdAt).toLocaleString()}
+                            className={`py-2 pr-4 whitespace-nowrap ${
+                              isToday(o.createdAt) ? "text-blue-500" : "text-gray-500"
+                            }`}
+                          >
+                            {shortDate(o.createdAt)}
                           </td>
                           <td className="py-2 pr-4">
                             {margin !== null ? `${margin.toFixed(0)}%` : "—"}
