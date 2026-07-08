@@ -376,6 +376,88 @@ export async function getMarketMatches(
   return map;
 }
 
+// Splits free text into the significant words used to fuzzy-match a
+// requested inquiry line against the offers table: lowercased, alphanumeric
+// tokens of length >= 3 (long enough to be discriminating — "ml", "of", "no"
+// would otherwise match almost everything), a short stopword list dropped,
+// and capped so a long product description doesn't turn into an
+// impossibly-strict AND-of-ten-words query.
+const INQUIRY_STOPWORDS = new Set(["the", "and", "for", "with", "new", "set", "pack"]);
+const MAX_MATCH_WORDS = 6;
+
+function tokenizeForMatch(text: string): string[] {
+  const words = text
+    .toLowerCase()
+    .split(/[^a-z0-9]+/i)
+    .map((w) => w.trim())
+    .filter((w) => w.length >= 3 && !INQUIRY_STOPWORDS.has(w));
+  return Array.from(new Set(words)).slice(0, MAX_MATCH_WORDS);
+}
+
+// Cap on offers returned per inquiry line — plenty to compare suppliers on
+// one product, without pulling in an unbounded result for a very generic
+// search term.
+const MAX_MATCHES_PER_ITEM = 50;
+
+// For the sourcing-inquiry matcher: given one requested line (a product a
+// client wants a quote for, with an optional brand/SKU), find every existing
+// offer that's a plausible match. SKU is checked first and, when found, is
+// treated as authoritative (an exact SKU match beats any text guess) — same
+// precedence as getMarketMatchesBySku. Falls back to a fuzzy AND-of-words
+// text match otherwise, which is the best we can do without a fuzzy-search
+// extension: no pg_trgm/full-text index is assumed here, just plain ILIKE.
+export async function matchInquiryItem(item: {
+  brand?: string | null;
+  product: string;
+  sku?: string | null;
+}): Promise<Offer[]> {
+  await ensureSchema();
+  const pool = getPool();
+
+  const sku = item.sku?.trim();
+  if (sku) {
+    const { rows } = await pool.query(
+      `SELECT * FROM offers WHERE sku IS NOT NULL AND lower(trim(sku)) = lower($1)
+       ORDER BY price ASC LIMIT $2;`,
+      [sku, MAX_MATCHES_PER_ITEM]
+    );
+    if (rows.length > 0) return rows.map(mapRow);
+  }
+
+  const brand = item.brand?.trim();
+  // When the caller already knows the brand (a real column in their file),
+  // match product words against the product field alone and add brand as a
+  // separate filter. Without a known brand, the requested text might have
+  // the brand folded into the product string (e.g. a plain pasted line like
+  // "Chanel No 5 EDP 100ml"), so match against product+brand combined
+  // instead — otherwise a brand name sitting in position one of the text
+  // would just fail to match anything.
+  const words = tokenizeForMatch(item.product);
+  if (words.length === 0) return [];
+
+  const values: unknown[] = [];
+  const wordConditions = words.map((w) => {
+    values.push(`%${w}%`);
+    return brand
+      ? `product ILIKE $${values.length}`
+      : `(product || ' ' || brand) ILIKE $${values.length}`;
+  });
+
+  let brandCondition = "";
+  if (brand) {
+    values.push(`%${brand}%`);
+    brandCondition = ` AND brand ILIKE $${values.length}`;
+  }
+
+  values.push(MAX_MATCHES_PER_ITEM);
+  const { rows } = await pool.query(
+    `SELECT * FROM offers WHERE ${wordConditions.join(" AND ")}${brandCondition}
+     ORDER BY price ASC LIMIT $${values.length};`,
+    values
+  );
+  return rows.map(mapRow);
+}
+
 // One-off data-repair helper: the original bulk import came from a workbook
 // where each tab was named after the brand it held, and every row stores
 // that tab name as "Source: <tab name>" in `notes`. A handful of source

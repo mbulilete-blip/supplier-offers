@@ -24,6 +24,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <Link href="/matrix" className="hover:text-gray-900">
                 Matrix
               </Link>
+              <Link href="/inquiry" className="hover:text-gray-900">
+                Sourcing Inquiry
+              </Link>
               <Link href="/history" className="hover:text-gray-900">
                 History
               </Link>
