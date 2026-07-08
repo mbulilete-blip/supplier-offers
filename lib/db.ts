@@ -254,6 +254,22 @@ export async function renameSupplier(from: string, to: string): Promise<number> 
   return rowCount ?? 0;
 }
 
+// Bulk-renames every offer currently filed under one exact brand string to a
+// new one - the brand-level equivalent of renameSupplier, used to fix a
+// mistyped or corrupted brand name (or just standardize casing/spelling)
+// everywhere it appears in one action, across every supplier.
+export async function renameBrand(from: string, to: string): Promise<number> {
+  await ensureSchema();
+  const trimmedFrom = from.trim();
+  const trimmedTo = to.trim();
+  if (!trimmedFrom || !trimmedTo) return 0;
+  const { rowCount } = await getPool().query(
+    `UPDATE offers SET brand = $1, updated_at = now() WHERE brand = $2;`,
+    [trimmedTo, trimmedFrom]
+  );
+  return rowCount ?? 0;
+}
+
 // Deletes every offer from one exact supplier string within one brand - the
 // "delete this column" action on the Matrix page. Scoped to the brand
 // currently being viewed (not every offer that supplier has ever quoted

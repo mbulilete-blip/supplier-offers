@@ -128,11 +128,71 @@ export default function MatrixPage() {
     }
   };
 
-  useEffect(() => {
+  // Renaming the brand itself, from the dropdown - fixes a mistyped/corrupted
+  // brand name or standardizes spelling. Unlike the supplier delete action,
+  // this is intentionally global (every offer under that brand string, across
+  // every supplier), matching what "the brand" conceptually means.
+  const [renamingBrand, setRenamingBrand] = useState(false);
+  const [brandRenameValue, setBrandRenameValue] = useState("");
+  const [brandRenaming, setBrandRenaming] = useState(false);
+  const [brandRenameError, setBrandRenameError] = useState<string | null>(null);
+  const [brandRenameNotice, setBrandRenameNotice] = useState<string | null>(null);
+
+  const loadBrands = () => {
     fetch("/api/brands")
       .then((r) => r.json())
       .then((data) => setBrands(Array.isArray(data) ? data : []));
+  };
+
+  useEffect(() => {
+    loadBrands();
   }, []);
+
+  const startBrandRename = () => {
+    if (!brand) return;
+    setBrandRenameValue(brand);
+    setBrandRenameError(null);
+    setBrandRenameNotice(null);
+    setRenamingBrand(true);
+  };
+
+  const cancelBrandRename = () => {
+    setRenamingBrand(false);
+    setBrandRenameValue("");
+    setBrandRenameError(null);
+  };
+
+  const saveBrandRename = async () => {
+    const to = brandRenameValue.trim();
+    if (!to) {
+      setBrandRenameError("Name can't be empty.");
+      return;
+    }
+    if (to === brand) {
+      cancelBrandRename();
+      return;
+    }
+    setBrandRenaming(true);
+    setBrandRenameError(null);
+    try {
+      const res = await fetch("/api/brands/rename", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ from: brand, to }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "Failed to rename brand.");
+      setBrandRenameNotice(`Renamed ${data.updated} offer(s) from "${brand}" to "${to}".`);
+      setRenamingBrand(false);
+      setBrandRenameValue("");
+      loadBrands();
+      setBrand(to);
+    } catch (e) {
+      setBrandRenameError(e instanceof Error ? e.message : "Failed to rename brand.");
+    } finally {
+      setBrandRenaming(false);
+    }
+  };
 
   const fetchOffers = () => {
     if (!brand) {
@@ -224,18 +284,61 @@ export default function MatrixPage() {
         </p>
       </section>
 
-      <select
-        className="input w-72"
-        value={brand}
-        onChange={(e) => setBrand(e.target.value)}
-      >
-        <option value="">Select a brand…</option>
-        {brands.map((b) => (
-          <option key={b.brand} value={b.brand}>
-            {b.brand} ({b.count.toLocaleString()})
-          </option>
-        ))}
-      </select>
+      {renamingBrand ? (
+        <div className="flex items-center gap-2">
+          <input
+            autoFocus
+            className="input w-72"
+            value={brandRenameValue}
+            onChange={(e) => setBrandRenameValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") saveBrandRename();
+              if (e.key === "Escape") cancelBrandRename();
+            }}
+          />
+          <button
+            onClick={saveBrandRename}
+            disabled={brandRenaming}
+            className="text-xs font-medium text-gray-900 hover:underline disabled:opacity-50"
+          >
+            {brandRenaming ? "Saving…" : "Save"}
+          </button>
+          <button
+            onClick={cancelBrandRename}
+            disabled={brandRenaming}
+            className="text-xs text-gray-400 hover:underline"
+          >
+            Cancel
+          </button>
+          {brandRenameError && <span className="text-xs text-red-600">{brandRenameError}</span>}
+        </div>
+      ) : (
+        <div className="flex items-center gap-2">
+          <select
+            className="input w-72"
+            value={brand}
+            onChange={(e) => setBrand(e.target.value)}
+          >
+            <option value="">Select a brand…</option>
+            {brands.map((b) => (
+              <option key={b.brand} value={b.brand}>
+                {b.brand} ({b.count.toLocaleString()})
+              </option>
+            ))}
+          </select>
+          {brand && (
+            <button
+              onClick={startBrandRename}
+              title="Rename this brand everywhere"
+              className="text-gray-400 hover:text-gray-700"
+            >
+              ✎ Rename brand
+            </button>
+          )}
+        </div>
+      )}
+
+      {brandRenameNotice && <p className="text-xs text-green-700">{brandRenameNotice}</p>}
 
       {!brand && <p className="text-sm text-gray-400">Choose a brand above to build the matrix.</p>}
 
