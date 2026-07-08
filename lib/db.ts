@@ -211,6 +211,25 @@ export async function renameSupplier(from: string, to: string): Promise<number> 
   return rowCount ?? 0;
 }
 
+// Deletes every offer from one exact supplier string within one brand - the
+// "delete this column" action on the Matrix page. Scoped to the brand
+// currently being viewed (not every offer that supplier has ever quoted
+// across other brands), matching what a matrix column actually represents.
+export async function deleteOffersBySupplierAndBrand(
+  supplier: string,
+  brand: string
+): Promise<number> {
+  await ensureSchema();
+  const trimmedSupplier = supplier.trim();
+  const trimmedBrand = brand.trim();
+  if (!trimmedSupplier || !trimmedBrand) return 0;
+  const { rowCount } = await getPool().query(
+    `DELETE FROM offers WHERE supplier = $1 AND brand = $2;`,
+    [trimmedSupplier, trimmedBrand]
+  );
+  return rowCount ?? 0;
+}
+
 export type MarketMatch = {
   supplier: string;
   price: number;

@@ -93,6 +93,41 @@ export default function MatrixPage() {
     }
   };
 
+  // Deleting an entire column - every offer from one supplier, for the brand
+  // currently being viewed. Scoped to this brand (not that supplier's offers
+  // everywhere) since that's what a column actually represents; other brands
+  // from the same supplier are untouched.
+  const [deletingSupplier, setDeletingSupplier] = useState(false);
+  const [deleteNotice, setDeleteNotice] = useState<string | null>(null);
+
+  const deleteColumn = async (supplier: string) => {
+    const count = offers.filter((o) => o.supplier === supplier).length;
+    if (
+      !confirm(
+        `Delete all ${count} offer(s) from "${supplier}" for ${brand}? This can't be undone.`
+      )
+    ) {
+      return;
+    }
+    setDeletingSupplier(true);
+    setDeleteNotice(null);
+    try {
+      const res = await fetch("/api/suppliers/delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ supplier, brand }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "Failed to delete offers.");
+      setDeleteNotice(`Deleted ${data.deleted} offer(s) from "${supplier}" for ${brand}.`);
+      fetchOffers();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Failed to delete offers.");
+    } finally {
+      setDeletingSupplier(false);
+    }
+  };
+
   useEffect(() => {
     fetch("/api/brands")
       .then((r) => r.json())
@@ -214,6 +249,7 @@ export default function MatrixPage() {
       )}
 
       {renameNotice && <p className="text-xs text-green-700">{renameNotice}</p>}
+      {deleteNotice && <p className="text-xs text-green-700">{deleteNotice}</p>}
 
       {!loading && brand && products.length > 0 && (
         <div className="overflow-auto rounded-xl border border-gray-200 bg-white">
@@ -269,6 +305,14 @@ export default function MatrixPage() {
                             className="text-gray-300 hover:text-gray-600"
                           >
                             ✎
+                          </button>
+                          <button
+                            onClick={() => deleteColumn(s)}
+                            disabled={deletingSupplier}
+                            title={`Delete all offers from "${s}" for ${brand}`}
+                            className="text-gray-300 hover:text-red-600 disabled:opacity-50"
+                          >
+                            🗑
                           </button>
                         </div>
                       )}
@@ -346,9 +390,9 @@ export default function MatrixPage() {
       {!loading && brand && products.length > 0 && (
         <p className="text-xs text-gray-400">
           &quot;Updated&quot; under each supplier is when their most recent price for this brand
-          was added. Click any price to edit that offer, or the ✎ next to a supplier name to
-          rename it everywhere (across every brand, not just this one). Hover a price for its
-          exact date.{" "}
+          was added. Click any price to edit that offer. Next to a supplier name, ✎ renames it
+          everywhere (across every brand, not just this one), and 🗑 deletes all of that
+          supplier&apos;s offers for this brand only. Hover a price for its exact date.{" "}
           <span className="inline-block h-1.5 w-1.5 rounded-full bg-blue-500 align-middle" /> and
           blue text mark today.
         </p>
