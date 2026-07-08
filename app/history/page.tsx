@@ -14,6 +14,12 @@ type Offer = {
   createdAt: string;
 };
 
+type SupplierGroup = {
+  canonical: string;
+  count: number;
+  variants: { supplier: string; count: number }[];
+};
+
 // A supplier's full offer list fits comfortably in one request (see
 // MAX_PAGE_SIZE in lib/db.ts) - this page needs every offer for the selected
 // supplier at once to build a complete price history, so pagination would
@@ -24,9 +30,14 @@ const formatDate = (iso: string): string =>
   new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
 
 export default function HistoryPage() {
-  const [suppliers, setSuppliers] = useState<{ supplier: string; count: number }[]>([]);
+  // Fuzzy-grouped so "AVOLTA 30.04.26", "AVOLTA PROMO 2506", "AVOLTA SPECIAL
+  // 250526" etc. show up once as "AVOLTA" instead of as dozens of near-
+  // duplicate batch-labeled rows (see lib/supplierNormalize.ts). Grouping is
+  // a heuristic, so the raw variants merged into a group are always shown
+  // once one is selected, so you can sanity-check it.
+  const [supplierGroups, setSupplierGroups] = useState<SupplierGroup[]>([]);
   const [brands, setBrands] = useState<{ brand: string; count: number }[]>([]);
-  const [supplier, setSupplier] = useState("");
+  const [supplierGroup, setSupplierGroup] = useState("");
   const [brand, setBrand] = useState("");
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
@@ -36,9 +47,9 @@ export default function HistoryPage() {
   const [truncated, setTruncated] = useState(false);
 
   useEffect(() => {
-    fetch("/api/suppliers")
+    fetch("/api/suppliers?grouped=true")
       .then((r) => r.json())
-      .then((data) => setSuppliers(Array.isArray(data) ? data : []));
+      .then((data) => setSupplierGroups(Array.isArray(data) ? data : []));
     fetch("/api/brands")
       .then((r) => r.json())
       .then((data) => setBrands(Array.isArray(data) ? data : []));
@@ -49,14 +60,24 @@ export default function HistoryPage() {
     return () => clearTimeout(t);
   }, [searchInput]);
 
+  const selectedGroup = useMemo(
+    () => supplierGroups.find((g) => g.canonical === supplierGroup) ?? null,
+    [supplierGroups, supplierGroup]
+  );
+
   useEffect(() => {
-    if (!supplier) {
+    if (!selectedGroup) {
       setOffers([]);
       setTruncated(false);
       return;
     }
     setLoading(true);
-    const params = new URLSearchParams({ supplier, limit: String(FETCH_LIMIT), page: "1" });
+    const rawSuppliers = selectedGroup.variants.map((v) => v.supplier).join(",");
+    const params = new URLSearchParams({
+      suppliers: rawSuppliers,
+      limit: String(FETCH_LIMIT),
+      page: "1",
+    });
     if (brand) params.set("brand", brand);
     if (search) params.set("search", search);
     fetch(`/api/offers?${params.toString()}`)
@@ -66,7 +87,7 @@ export default function HistoryPage() {
         setTruncated((data.total ?? 0) > (data.offers?.length ?? 0));
         setLoading(false);
       });
-  }, [supplier, brand, search]);
+  }, [selectedGroup, brand, search]);
 
   const groups = useMemo(() => {
     // Group by SKU/EAN when present (the real product identity - see the
@@ -103,11 +124,15 @@ export default function HistoryPage() {
       </section>
 
       <div className="flex flex-wrap items-center gap-3">
-        <select className="input w-64" value={supplier} onChange={(e) => setSupplier(e.target.value)}>
+        <select
+          className="input w-64"
+          value={supplierGroup}
+          onChange={(e) => setSupplierGroup(e.target.value)}
+        >
           <option value="">Select a supplier…</option>
-          {suppliers.map((s) => (
-            <option key={s.supplier} value={s.supplier}>
-              {s.supplier} ({s.count.toLocaleString()})
+          {supplierGroups.map((g) => (
+            <option key={g.canonical} value={g.canonical}>
+              {g.canonical} ({g.count.toLocaleString()})
             </option>
           ))}
         </select>
@@ -135,8 +160,16 @@ export default function HistoryPage() {
         </label>
       </div>
 
-      {!supplier && (
+      {!selectedGroup && (
         <p className="text-sm text-gray-400">Choose a supplier above to see their price history.</p>
+      )}
+
+      {selectedGroup && selectedGroup.variants.length > 1 && (
+        <p className="text-xs text-gray-400">
+          Grouped from {selectedGroup.variants.length} name variants on file:{" "}
+          {selectedGroup.variants.map((v) => v.supplier).join(", ")}. If any of those aren&apos;t
+          really the same supplier, let me know and I&apos;ll split them back out.
+        </p>
       )}
 
       {loading && <p className="text-sm text-gray-400">Loading…</p>}
@@ -148,7 +181,7 @@ export default function HistoryPage() {
         </p>
       )}
 
-      {!loading && supplier && groups.length === 0 && (
+      {!loading && selectedGroup && groups.length === 0 && (
         <p className="text-sm text-gray-400">No price history found for this filter.</p>
       )}
 

@@ -9,6 +9,14 @@ export async function GET(req: NextRequest) {
   const search = searchParams.get("search") ?? undefined;
   const brand = searchParams.get("brand") ?? undefined;
   const supplier = searchParams.get("supplier") ?? undefined;
+  // Comma-separated list of exact raw supplier values - used by the History
+  // page to fetch every offer belonging to a fuzzy-matched group of supplier
+  // name variants (e.g. "AVOLTA 30.04.26", "AVOLTA PROMO 2506", ...) in one
+  // request. Takes precedence over `supplier` when present.
+  const suppliersParam = searchParams.get("suppliers") ?? undefined;
+  const supplierIn = suppliersParam
+    ? suppliersParam.split(",").map((s) => s.trim()).filter(Boolean)
+    : undefined;
   const limit = searchParams.get("limit") ? Number(searchParams.get("limit")) : undefined;
   const page = searchParams.get("page") ? Number(searchParams.get("page")) : 1;
   const effectiveLimit = limit && !Number.isNaN(limit) ? limit : 100;
@@ -18,6 +26,7 @@ export async function GET(req: NextRequest) {
     search,
     brand,
     supplier,
+    supplierIn,
     limit: effectiveLimit,
     offset,
   });

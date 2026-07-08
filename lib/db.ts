@@ -1,5 +1,6 @@
 import { Pool } from "pg";
 import { Offer, OfferInput } from "./types";
+import { groupSuppliers, SupplierGroup } from "./supplierNormalize";
 
 // Vercel Postgres (Neon) sets POSTGRES_URL automatically once you add the
 // Storage integration in the Vercel dashboard. DATABASE_URL is supported
@@ -90,6 +91,11 @@ export type ListOffersParams = {
   search?: string;
   brand?: string;
   supplier?: string;
+  // Exact-match against any of these raw supplier values at once - used by
+  // the History page to pull every offer for a fuzzy-matched group of
+  // supplier name variants (see lib/supplierNormalize.ts) in one query.
+  // Takes precedence over `supplier` when both are set.
+  supplierIn?: string[];
   limit?: number;
   offset?: number;
 };
@@ -117,6 +123,7 @@ export async function listOffers(params: ListOffersParams = {}): Promise<ListOff
   const search = params.search?.trim();
   const brand = params.brand?.trim();
   const supplier = params.supplier?.trim();
+  const supplierIn = params.supplierIn?.map((s) => s.trim()).filter(Boolean);
 
   const conditions: string[] = [];
   const values: unknown[] = [];
@@ -125,7 +132,10 @@ export async function listOffers(params: ListOffersParams = {}): Promise<ListOff
     values.push(brand);
     conditions.push(`brand = $${values.length}`);
   }
-  if (supplier) {
+  if (supplierIn && supplierIn.length > 0) {
+    values.push(supplierIn);
+    conditions.push(`supplier = ANY($${values.length}::text[])`);
+  } else if (supplier) {
     values.push(supplier);
     conditions.push(`supplier = $${values.length}`);
   }
@@ -172,6 +182,16 @@ export async function listSuppliers(): Promise<{ supplier: string; count: number
     `SELECT supplier, COUNT(*)::int AS count FROM offers GROUP BY supplier ORDER BY supplier ASC;`
   );
   return rows.map((r) => ({ supplier: r.supplier, count: r.count }));
+}
+
+// Same distinct-supplier list as listSuppliers(), but fuzzy-grouped so that
+// e.g. "AVOLTA 30.04.26", "AVOLTA PROMO 2506", "AVOLTA SPECIAL 250526" all
+// collapse into one "AVOLTA" entry with its raw variants attached. Used by
+// the History page's supplier picker so one real-world supplier shows up
+// once instead of as dozens of near-duplicate batch-labeled rows.
+export async function listSupplierGroups(): Promise<SupplierGroup[]> {
+  const suppliers = await listSuppliers();
+  return groupSuppliers(suppliers);
 }
 
 export type MarketMatch = {
