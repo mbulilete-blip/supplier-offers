@@ -36,6 +36,63 @@ export default function MatrixPage() {
   const [truncated, setTruncated] = useState(false);
   const [editingOffer, setEditingOffer] = useState<Offer | null>(null);
 
+  // Renaming a supplier straight from its column header - handy for fixing a
+  // corrupted supplier value (e.g. a sheet/tab name that got used as the
+  // literal supplier text on import) right where you spot it, without
+  // hunting down every affected offer individually. This renames ALL offers
+  // filed under that exact supplier string, across every brand, not just the
+  // ones showing in this matrix.
+  const [renamingSupplier, setRenamingSupplier] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [renaming, setRenaming] = useState(false);
+  const [renameError, setRenameError] = useState<string | null>(null);
+  const [renameNotice, setRenameNotice] = useState<string | null>(null);
+
+  const startRename = (supplier: string) => {
+    setRenamingSupplier(supplier);
+    setRenameValue(supplier);
+    setRenameError(null);
+    setRenameNotice(null);
+  };
+
+  const cancelRename = () => {
+    setRenamingSupplier(null);
+    setRenameValue("");
+    setRenameError(null);
+  };
+
+  const saveRename = async () => {
+    if (!renamingSupplier) return;
+    const to = renameValue.trim();
+    if (!to) {
+      setRenameError("Name can't be empty.");
+      return;
+    }
+    if (to === renamingSupplier) {
+      cancelRename();
+      return;
+    }
+    setRenaming(true);
+    setRenameError(null);
+    try {
+      const res = await fetch("/api/suppliers/rename", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ from: renamingSupplier, to }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "Failed to rename supplier.");
+      setRenameNotice(`Renamed ${data.updated} offer(s) from "${renamingSupplier}" to "${to}".`);
+      setRenamingSupplier(null);
+      setRenameValue("");
+      fetchOffers();
+    } catch (e) {
+      setRenameError(e instanceof Error ? e.message : "Failed to rename supplier.");
+    } finally {
+      setRenaming(false);
+    }
+  };
+
   useEffect(() => {
     fetch("/api/brands")
       .then((r) => r.json())
@@ -156,6 +213,8 @@ export default function MatrixPage() {
         </p>
       )}
 
+      {renameNotice && <p className="text-xs text-green-700">{renameNotice}</p>}
+
       {!loading && brand && products.length > 0 && (
         <div className="overflow-auto rounded-xl border border-gray-200 bg-white">
           <table className="text-left text-xs">
@@ -164,12 +223,58 @@ export default function MatrixPage() {
                 <th className="sticky left-0 z-10 bg-gray-50 px-3 py-2">Product</th>
                 {suppliers.map((s) => {
                   const updated = supplierLastUpdated.get(s);
+                  const isRenaming = renamingSupplier === s;
                   return (
-                    <th key={s} className="px-3 py-2 text-right whitespace-nowrap">
-                      <div>{s}</div>
-                      {updated && (
+                    <th key={s} className="px-3 py-2 text-right align-top">
+                      {isRenaming ? (
+                        <div className="flex flex-col items-end gap-1 normal-case">
+                          <input
+                            autoFocus
+                            className="input w-40 text-right text-xs"
+                            value={renameValue}
+                            onChange={(e) => setRenameValue(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") saveRename();
+                              if (e.key === "Escape") cancelRename();
+                            }}
+                          />
+                          <div className="flex gap-2">
+                            <button
+                              onClick={saveRename}
+                              disabled={renaming}
+                              className="text-[10px] font-medium text-gray-900 hover:underline disabled:opacity-50"
+                            >
+                              {renaming ? "Saving…" : "Save"}
+                            </button>
+                            <button
+                              onClick={cancelRename}
+                              disabled={renaming}
+                              className="text-[10px] text-gray-400 hover:underline"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                          {renameError && (
+                            <div className="max-w-[10rem] whitespace-normal text-[10px] text-red-600">
+                              {renameError}
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="flex items-center justify-end gap-1 whitespace-nowrap">
+                          <span>{s}</span>
+                          <button
+                            onClick={() => startRename(s)}
+                            title="Rename this supplier everywhere"
+                            className="text-gray-300 hover:text-gray-600"
+                          >
+                            ✎
+                          </button>
+                        </div>
+                      )}
+                      {!isRenaming && updated && (
                         <div
-                          className={`text-[10px] font-normal normal-case ${
+                          className={`whitespace-nowrap text-[10px] font-normal normal-case ${
                             isToday(updated) ? "text-blue-500" : "text-gray-400"
                           }`}
                         >
@@ -241,7 +346,9 @@ export default function MatrixPage() {
       {!loading && brand && products.length > 0 && (
         <p className="text-xs text-gray-400">
           &quot;Updated&quot; under each supplier is when their most recent price for this brand
-          was added. Click any price to edit that offer, or hover for its exact date.{" "}
+          was added. Click any price to edit that offer, or the ✎ next to a supplier name to
+          rename it everywhere (across every brand, not just this one). Hover a price for its
+          exact date.{" "}
           <span className="inline-block h-1.5 w-1.5 rounded-full bg-blue-500 align-middle" /> and
           blue text mark today.
         </p>

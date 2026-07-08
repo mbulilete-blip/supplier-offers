@@ -194,6 +194,23 @@ export async function listSupplierGroups(): Promise<SupplierGroup[]> {
   return groupSuppliers(suppliers);
 }
 
+// Bulk-renames every offer currently filed under one exact supplier string to
+// a new one - used from the Matrix page so a corrupted/messy supplier name
+// spotted in a column header (e.g. a sheet name or promo label that got used
+// as the literal supplier value on import) can be fixed in one action instead
+// of editing every affected offer individually.
+export async function renameSupplier(from: string, to: string): Promise<number> {
+  await ensureSchema();
+  const trimmedFrom = from.trim();
+  const trimmedTo = to.trim();
+  if (!trimmedFrom || !trimmedTo) return 0;
+  const { rowCount } = await getPool().query(
+    `UPDATE offers SET supplier = $1, updated_at = now() WHERE supplier = $2;`,
+    [trimmedTo, trimmedFrom]
+  );
+  return rowCount ?? 0;
+}
+
 export type MarketMatch = {
   supplier: string;
   price: number;
