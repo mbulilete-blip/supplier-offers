@@ -50,7 +50,7 @@ export async function POST(req: NextRequest) {
     moq: body.moq !== undefined && body.moq !== null ? Number(body.moq) : null,
     leadTimeDays:
       body.leadTimeDays !== undefined && body.leadTimeDays !== null
-        ? Number(body.leadTimeDays)
+        ? String(body.leadTimeDays).trim() || null
         : null,
   });
 

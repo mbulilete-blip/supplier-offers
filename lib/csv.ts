@@ -127,7 +127,7 @@ export function offersFromCsv(text: string): CsvImportResult {
       currency: str(get("currency")) ?? "EUR",
       rrp: num(get("rrp")) ?? null,
       moq: int(get("moq")) ?? null,
-      leadTimeDays: int(get("leadtimedays") ?? get("lead time days") ?? get("lead_time_days")) ?? null,
+      leadTimeDays: str(get("leadtimedays") ?? get("lead time days") ?? get("lead_time_days")) ?? null,
       paymentTerms: str(get("paymentterms") ?? get("payment terms") ?? get("payment_terms")) ?? null,
       region: str(get("region")) ?? null,
       incoterm: str(get("incoterm")) ?? null,

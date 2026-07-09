@@ -7,7 +7,9 @@ export type OfferInput = {
   currency?: string;
   rrp?: number | null;
   moq?: number | null;
-  leadTimeDays?: number | null;
+  // Free text, not a strict day count - suppliers routinely quote this as
+  // "6 weeks", "10-15 days", "immediate", etc., not a single integer.
+  leadTimeDays?: string | null;
   paymentTerms?: string | null;
   region?: string | null;
   // Shipping/pricing term, e.g. "EXW Dubai", "FOB", "DDP" — matters for
@@ -30,7 +32,7 @@ export type Offer = {
   currency: string;
   rrp: number | null;
   moq: number | null;
-  leadTimeDays: number | null;
+  leadTimeDays: string | null;
   paymentTerms: string | null;
   region: string | null;
   incoterm: string | null;

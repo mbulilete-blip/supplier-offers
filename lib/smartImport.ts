@@ -35,7 +35,7 @@ export const ROLE_LABELS: Record<ColumnRole, string> = {
   currency: "Currency",
   rrp: "RRP",
   moq: "MOQ",
-  leadTimeDays: "Lead time (days)",
+  leadTimeDays: "Lead time",
   paymentTerms: "Payment terms",
   region: "Region",
   incoterm: "Incoterm / shipping terms (e.g. EXW)",
@@ -314,8 +314,9 @@ export type BuildOptions = {
   incotermOverride?: string;
   marketOriginOverride?: string;
   // Lead time and MOQ genuinely can vary per product even within one list,
-  // so these only fill in when a row has no value of its own.
-  defaultLeadTimeDays?: number;
+  // so these only fill in when a row has no value of its own. Lead time is
+  // free text (e.g. "6 weeks", "10-15 days"), not a strict day count.
+  defaultLeadTimeDays?: string;
   defaultMoq?: number;
 };
 
@@ -377,7 +378,7 @@ export function buildOffersFromMapping(
     const rrp = parseMoney(rrpCol ? r[rrpCol.index] : undefined) ?? null;
     const moq = parseFirstInt(moqCol ? r[moqCol.index] : undefined) ?? options.defaultMoq ?? null;
     const leadTimeDays =
-      parseFirstInt(leadCol ? r[leadCol.index] : undefined) ?? options.defaultLeadTimeDays ?? null;
+      str(leadCol ? r[leadCol.index] : undefined) ?? options.defaultLeadTimeDays ?? null;
     const paymentTerms = str(paymentCol ? r[paymentCol.index] : undefined) ?? null;
     const region = str(regionCol ? r[regionCol.index] : undefined) ?? null;
     const incoterm =

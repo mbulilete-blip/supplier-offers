@@ -26,7 +26,9 @@ const FIELDS: { key: keyof OfferInput; label: string; type?: string; inputMode?:
   // RRP, these are often non-strict-numeric in practice (e.g. "500 (neg.)" or
   // "2-3"), and a number input's spinner/strict validation got in the way.
   { key: "moq", label: "MOQ", type: "text", inputMode: "numeric" },
-  { key: "leadTimeDays", label: "Lead time (days)", type: "text", inputMode: "numeric" },
+  // Free text on purpose - suppliers quote this as "6 weeks", "10-15 days",
+  // "immediate", etc., not a strict day-count integer.
+  { key: "leadTimeDays", label: "Lead time" },
   { key: "paymentTerms", label: "Payment terms" },
   { key: "region", label: "Region" },
   { key: "incoterm", label: "Incoterm" },
@@ -70,15 +72,7 @@ export default function EditOfferModal({ offer, onClose, onSaved }: Props) {
       setError("MOQ must be a whole number, or left blank.");
       return;
     }
-    const leadTimeTrimmed = form.leadTimeDays.trim();
-    const leadTimeDays = leadTimeTrimmed === "" ? null : Number(leadTimeTrimmed);
-    if (
-      leadTimeDays !== null &&
-      (!Number.isFinite(leadTimeDays) || !Number.isInteger(leadTimeDays) || leadTimeDays < 0)
-    ) {
-      setError("Lead time must be a whole number of days, or left blank.");
-      return;
-    }
+    const leadTimeDays = form.leadTimeDays.trim() || null;
 
     const payload: Partial<OfferInput> = {
       supplier: form.supplier.trim(),

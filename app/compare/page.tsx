@@ -27,7 +27,7 @@ const offerTooltip = (o: Offer): string => {
   const parts = [
     `Added ${new Date(o.createdAt).toLocaleString()}`,
     o.moq ? `MOQ ${o.moq}` : null,
-    o.leadTimeDays ? `Lead time ${o.leadTimeDays}d` : null,
+    o.leadTimeDays ? `Lead time ${o.leadTimeDays}` : null,
     o.paymentTerms ? `Terms: ${o.paymentTerms}` : null,
     o.region ? `Region: ${o.region}` : null,
     o.incoterm ? `Incoterm: ${o.incoterm}` : null,
@@ -239,9 +239,7 @@ export default function ComparePage() {
                             {margin !== null ? `${margin.toFixed(0)}%` : "—"}
                           </td>
                           <td className="py-2 pr-4">{o.moq ?? "—"}</td>
-                          <td className="py-2 pr-4">
-                            {o.leadTimeDays ? `${o.leadTimeDays}d` : "—"}
-                          </td>
+                          <td className="py-2 pr-4">{o.leadTimeDays ?? "—"}</td>
                           <td className="py-2 pr-4">{o.paymentTerms ?? "—"}</td>
                           <td className="py-2 pr-4">{o.region ?? "—"}</td>
                           <td className="py-2 pr-4 text-gray-500">{o.notes ?? "—"}</td>

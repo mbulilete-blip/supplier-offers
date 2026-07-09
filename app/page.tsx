@@ -413,7 +413,7 @@ export default function DashboardPage() {
                     {o.price.toFixed(2)} {o.currency}
                   </td>
                   <td className="px-4 py-3">{o.moq ?? "—"}</td>
-                  <td className="px-4 py-3">{o.leadTimeDays ? `${o.leadTimeDays}d` : "—"}</td>
+                  <td className="px-4 py-3">{o.leadTimeDays ?? "—"}</td>
                   <td className="px-4 py-3">{o.paymentTerms ?? "—"}</td>
                   <td className="px-4 py-3">{o.region ?? "—"}</td>
                   <td className="px-4 py-3 whitespace-nowrap text-gray-500">

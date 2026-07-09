@@ -44,7 +44,7 @@ export function ensureSchema(): Promise<void> {
           currency TEXT NOT NULL DEFAULT 'EUR',
           rrp NUMERIC,
           moq INTEGER,
-          lead_time_days INTEGER,
+          lead_time_days TEXT,
           payment_terms TEXT,
           region TEXT,
           notes TEXT,
@@ -58,7 +58,13 @@ export function ensureSchema(): Promise<void> {
         -- with the trademark owner's consent, so knowing whether a batch is
         -- EU-origin or not is a real legal signal, not just metadata.
         ALTER TABLE offers ADD COLUMN IF NOT EXISTS incoterm TEXT;
-        ALTER TABLE offers ADD COLUMN IF NOT EXISTS market_origin TEXT;`
+        ALTER TABLE offers ADD COLUMN IF NOT EXISTS market_origin TEXT;
+        -- Lead time started out as a whole-number day count, but suppliers
+        -- routinely quote it as "6 weeks", "10-15 days", "immediate", etc. -
+        -- widen the existing column to free text (a no-op if this has
+        -- already run once, since ALTER ... TYPE TEXT on a column that's
+        -- already TEXT succeeds without changing anything).
+        ALTER TABLE offers ALTER COLUMN lead_time_days TYPE TEXT USING lead_time_days::text;`
       )
       .then(() => undefined);
   }
@@ -77,7 +83,7 @@ function mapRow(row: any): Offer {
     currency: row.currency,
     rrp: row.rrp === null ? null : Number(row.rrp),
     moq: row.moq === null ? null : Number(row.moq),
-    leadTimeDays: row.lead_time_days === null ? null : Number(row.lead_time_days),
+    leadTimeDays: row.lead_time_days,
     paymentTerms: row.payment_terms,
     region: row.region,
     incoterm: row.incoterm,
