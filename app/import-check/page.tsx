@@ -430,8 +430,8 @@ export default function ImportCheckPage() {
               </label>
               <input
                 className="input mt-1 w-full text-sm"
-                type="number"
-                min={0}
+                type="text"
+                inputMode="numeric"
                 value={defaultLeadTimeDays}
                 onChange={(e) => setDefaultLeadTimeDays(e.target.value)}
                 placeholder="e.g. 7"
@@ -443,8 +443,8 @@ export default function ImportCheckPage() {
               </label>
               <input
                 className="input mt-1 w-full text-sm"
-                type="number"
-                min={0}
+                type="text"
+                inputMode="numeric"
                 value={defaultMoq}
                 onChange={(e) => setDefaultMoq(e.target.value)}
                 placeholder="e.g. 10"
