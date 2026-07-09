@@ -14,7 +14,7 @@ type Props = {
 // supplier name, price, terms, etc.) works the same way no matter where you
 // spotted it. Date added is intentionally not editable here: it reflects
 // exactly when the row was created, and stays a system timestamp.
-const FIELDS: { key: keyof OfferInput; label: string; type?: string }[] = [
+const FIELDS: { key: keyof OfferInput; label: string; type?: string; inputMode?: "numeric" }[] = [
   { key: "supplier", label: "Supplier" },
   { key: "brand", label: "Brand" },
   { key: "product", label: "Product" },
@@ -22,8 +22,11 @@ const FIELDS: { key: keyof OfferInput; label: string; type?: string }[] = [
   { key: "price", label: "Price", type: "number" },
   { key: "currency", label: "Currency" },
   { key: "rrp", label: "RRP", type: "number" },
-  { key: "moq", label: "MOQ", type: "number" },
-  { key: "leadTimeDays", label: "Lead time (days)", type: "number" },
+  // MOQ and lead time are text (not number) inputs on purpose - unlike price/
+  // RRP, these are often non-strict-numeric in practice (e.g. "500 (neg.)" or
+  // "2-3"), and a number input's spinner/strict validation got in the way.
+  { key: "moq", label: "MOQ", type: "text", inputMode: "numeric" },
+  { key: "leadTimeDays", label: "Lead time (days)", type: "text", inputMode: "numeric" },
   { key: "paymentTerms", label: "Payment terms" },
   { key: "region", label: "Region" },
   { key: "incoterm", label: "Incoterm" },
@@ -57,6 +60,26 @@ export default function EditOfferModal({ offer, onClose, onSaved }: Props) {
       return;
     }
 
+    // MOQ and lead time are plain text inputs (see FIELDS above) so typing
+    // isn't blocked by a number spinner, but both are still stored as
+    // whole-number columns in the database - so a non-numeric entry has to
+    // be caught here rather than silently saved as null/NaN.
+    const moqTrimmed = form.moq.trim();
+    const moq = moqTrimmed === "" ? null : Number(moqTrimmed);
+    if (moq !== null && (!Number.isFinite(moq) || !Number.isInteger(moq) || moq < 0)) {
+      setError("MOQ must be a whole number, or left blank.");
+      return;
+    }
+    const leadTimeTrimmed = form.leadTimeDays.trim();
+    const leadTimeDays = leadTimeTrimmed === "" ? null : Number(leadTimeTrimmed);
+    if (
+      leadTimeDays !== null &&
+      (!Number.isFinite(leadTimeDays) || !Number.isInteger(leadTimeDays) || leadTimeDays < 0)
+    ) {
+      setError("Lead time must be a whole number of days, or left blank.");
+      return;
+    }
+
     const payload: Partial<OfferInput> = {
       supplier: form.supplier.trim(),
       brand: form.brand.trim(),
@@ -65,8 +88,8 @@ export default function EditOfferModal({ offer, onClose, onSaved }: Props) {
       price,
       currency: form.currency.trim() || "EUR",
       rrp: form.rrp.trim() === "" ? null : Number(form.rrp),
-      moq: form.moq.trim() === "" ? null : Number(form.moq),
-      leadTimeDays: form.leadTimeDays.trim() === "" ? null : Number(form.leadTimeDays),
+      moq,
+      leadTimeDays,
       paymentTerms: form.paymentTerms.trim() || null,
       region: form.region.trim() || null,
       incoterm: form.incoterm.trim() || null,
@@ -114,6 +137,7 @@ export default function EditOfferModal({ offer, onClose, onSaved }: Props) {
               <input
                 className="input mt-1 w-full"
                 type={f.type ?? "text"}
+                inputMode={f.inputMode}
                 value={form[f.key] ?? ""}
                 onChange={(e) => handleChange(f.key, e.target.value)}
               />
