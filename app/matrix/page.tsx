@@ -28,6 +28,31 @@ const shortDate = (iso: string): string => {
 // point.
 const BRAND_FETCH_LIMIT = 5000;
 
+// Fixed width for the row-select checkbox column, sticky to the left of the
+// (resizable) Product column.
+const CHECKBOX_COL_WIDTH = 36;
+
+// Bulk RRP edits and bulk deletes both fan out into one request per
+// underlying offer id (there's no bulk endpoint) - capped concurrency keeps
+// this from overwhelming the `pg` pool (max 5 connections, see lib/db.ts),
+// same pattern used by the Inquiry match route.
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i]);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
 export default function MatrixPage() {
   const [brands, setBrands] = useState<{ brand: string; count: number }[]>([]);
   const [brand, setBrand] = useState("");
@@ -302,6 +327,8 @@ export default function MatrixPage() {
 
   useEffect(() => {
     fetchOffers();
+    setSelectedKeys(new Set());
+    setEditingRrpKey(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [brand]);
 
@@ -409,6 +436,128 @@ export default function MatrixPage() {
       contestedCount,
     };
   }, [offers]);
+
+  // Row selection (keyed the same way as the Product rows above - SKU if
+  // present, else lowercased/trimmed product name) for bulk delete. Cleared
+  // whenever the brand changes so a stale selection from a previous brand
+  // can never carry over invisibly.
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
+
+  const toggleRow = (key: string) => {
+    setSelectedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    setSelectedKeys((prev) =>
+      prev.size === products.length ? new Set() : new Set(products.map((p) => p.key))
+    );
+  };
+
+  const allSelected = products.length > 0 && selectedKeys.size === products.length;
+  const someSelected = selectedKeys.size > 0 && !allSelected;
+
+  const [deletingSelected, setDeletingSelected] = useState(false);
+
+  // Deletes every underlying offer (across every supplier) for each selected
+  // product row - a row can represent several offers, one per supplier, and
+  // there's no bulk endpoint, so this fans out one DELETE per offer id with
+  // capped concurrency (mapWithConcurrency) to stay under the pg pool limit.
+  const deleteSelectedRows = async () => {
+    if (selectedKeys.size === 0) return;
+    const ids: number[] = [];
+    for (const key of selectedKeys) {
+      const bySupplier = cellPrice.get(key);
+      if (!bySupplier) continue;
+      for (const o of bySupplier.values()) ids.push(o.id);
+    }
+    if (ids.length === 0) return;
+    if (
+      !confirm(
+        `Delete ${ids.length} offer(s) across ${selectedKeys.size} selected product(s)? This can't be undone.`
+      )
+    ) {
+      return;
+    }
+    setDeletingSelected(true);
+    try {
+      await mapWithConcurrency(ids, 5, (id) => fetch(`/api/offers/${id}`, { method: "DELETE" }));
+      setSelectedKeys(new Set());
+      fetchOffers();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Failed to delete selected offers.");
+    } finally {
+      setDeletingSelected(false);
+    }
+  };
+
+  // Inline RRP editing. RRP isn't its own column in the schema - it's a
+  // field on each individual offer (see `rrp` in lib/types.ts), and this
+  // Matrix page shows one canonical value per product row (whichever
+  // offer's rrp was added most recently - see productMap above). Editing it
+  // here writes the same value to every offer under this row's key, across
+  // every supplier, so the row stays consistent no matter which underlying
+  // offer is "most recent" afterwards. Deliberately does NOT touch
+  // `currency`, which is shared with the offer's price - only `rrp` itself
+  // is sent in the PUT body.
+  const [editingRrpKey, setEditingRrpKey] = useState<string | null>(null);
+  const [rrpDraft, setRrpDraft] = useState("");
+  const [savingRrp, setSavingRrp] = useState(false);
+  const [rrpError, setRrpError] = useState<string | null>(null);
+
+  const startRrpEdit = (key: string, currentRrp: number | null) => {
+    setEditingRrpKey(key);
+    setRrpDraft(currentRrp != null ? String(currentRrp) : "");
+    setRrpError(null);
+  };
+
+  const cancelRrpEdit = () => {
+    setEditingRrpKey(null);
+    setRrpDraft("");
+    setRrpError(null);
+  };
+
+  const saveRrpEdit = async () => {
+    if (!editingRrpKey) return;
+    const trimmed = rrpDraft.trim();
+    let value: number | null = null;
+    if (trimmed !== "") {
+      const parsed = Number(trimmed);
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        setRrpError("Enter a valid non-negative number, or leave blank to clear.");
+        return;
+      }
+      value = parsed;
+    }
+    const bySupplier = cellPrice.get(editingRrpKey);
+    const ids = bySupplier ? Array.from(bySupplier.values()).map((o) => o.id) : [];
+    if (ids.length === 0) {
+      cancelRrpEdit();
+      return;
+    }
+    setSavingRrp(true);
+    setRrpError(null);
+    try {
+      await mapWithConcurrency(ids, 5, (id) =>
+        fetch(`/api/offers/${id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ rrp: value }),
+        })
+      );
+      setEditingRrpKey(null);
+      setRrpDraft("");
+      fetchOffers();
+    } catch (e) {
+      setRrpError(e instanceof Error ? e.message : "Failed to update RRP.");
+    } finally {
+      setSavingRrp(false);
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -549,6 +698,27 @@ export default function MatrixPage() {
           <p className="text-[11px] text-gray-400 sm:hidden">
             ← Swipe sideways to see more suppliers →
           </p>
+          {selectedKeys.size > 0 && (
+            <div className="flex items-center gap-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2">
+              <span className="text-xs text-red-700">
+                {selectedKeys.size} product{selectedKeys.size === 1 ? "" : "s"} selected
+              </span>
+              <button
+                onClick={deleteSelectedRows}
+                disabled={deletingSelected}
+                className="text-xs font-medium text-red-700 hover:underline disabled:opacity-50"
+              >
+                {deletingSelected ? "Deleting…" : "Delete selected"}
+              </button>
+              <button
+                onClick={() => setSelectedKeys(new Set())}
+                disabled={deletingSelected}
+                className="text-xs text-gray-400 hover:underline"
+              >
+                Clear selection
+              </button>
+            </div>
+          )}
           <div className="overflow-auto rounded-xl border border-gray-200 bg-white">
             {/* table-fixed + colgroup gives every column a real, stable width
                 up front. With the old auto layout, a supplier name that could
@@ -558,6 +728,7 @@ export default function MatrixPage() {
                 letter per line. Fixed widths make that impossible. */}
             <table className="table-fixed text-left text-xs">
               <colgroup>
+                <col style={{ width: CHECKBOX_COL_WIDTH }} />
                 {/* No width on this col - some browsers don't reliably
                     relayout a fixed table when a <col>'s width is changed
                     dynamically after first paint. Setting the width on the
@@ -573,8 +744,27 @@ export default function MatrixPage() {
               <thead className="border-b border-gray-200 bg-gray-50 uppercase tracking-wide text-gray-500">
                 <tr>
                   <th
-                    className="sticky left-0 z-10 border-r border-gray-200 bg-gray-50 px-3 py-2 align-top relative"
-                    style={{ width: productColWidth, minWidth: productColWidth, maxWidth: productColWidth }}
+                    className="sticky left-0 z-10 border-r border-gray-200 bg-gray-50 px-2 py-2 align-top"
+                    style={{ width: CHECKBOX_COL_WIDTH, minWidth: CHECKBOX_COL_WIDTH, maxWidth: CHECKBOX_COL_WIDTH }}
+                  >
+                    <input
+                      type="checkbox"
+                      title="Select all"
+                      checked={allSelected}
+                      ref={(el) => {
+                        if (el) el.indeterminate = someSelected;
+                      }}
+                      onChange={toggleSelectAll}
+                    />
+                  </th>
+                  <th
+                    className="sticky z-10 border-r border-gray-200 bg-gray-50 px-3 py-2 align-top relative"
+                    style={{
+                      left: CHECKBOX_COL_WIDTH,
+                      width: productColWidth,
+                      minWidth: productColWidth,
+                      maxWidth: productColWidth,
+                    }}
                   >
                     Product{" "}
                     <span className="font-normal normal-case text-gray-300">
@@ -590,7 +780,7 @@ export default function MatrixPage() {
                   </th>
                   <th
                     className="sticky z-10 border-r border-gray-200 bg-gray-50 px-3 py-2 text-right align-top"
-                    style={{ left: productColWidth }}
+                    style={{ left: CHECKBOX_COL_WIDTH + productColWidth }}
                   >
                     RRP
                   </th>
@@ -685,14 +875,35 @@ export default function MatrixPage() {
                     }
                   }
                   const rowBg = rowIdx % 2 === 1 ? "bg-gray-50/60" : "bg-white";
+                  const isSelected = selectedKeys.has(p.key);
+                  const isEditingRrp = editingRrpKey === p.key;
                   return (
                     <tr
                       key={p.key}
                       className={`group border-b border-gray-100 last:border-0 hover:bg-gray-50 ${rowBg}`}
                     >
                       <td
-                        className={`sticky left-0 z-10 border-r border-gray-200 px-3 py-2 align-top font-medium group-hover:bg-gray-50 ${rowBg}`}
-                        style={{ width: productColWidth, minWidth: productColWidth, maxWidth: productColWidth }}
+                        className={`sticky left-0 z-10 border-r border-gray-200 px-2 py-2 align-top group-hover:bg-gray-50 ${rowBg}`}
+                        style={{
+                          width: CHECKBOX_COL_WIDTH,
+                          minWidth: CHECKBOX_COL_WIDTH,
+                          maxWidth: CHECKBOX_COL_WIDTH,
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => toggleRow(p.key)}
+                        />
+                      </td>
+                      <td
+                        className={`sticky z-10 border-r border-gray-200 px-3 py-2 align-top font-medium group-hover:bg-gray-50 ${rowBg}`}
+                        style={{
+                          left: CHECKBOX_COL_WIDTH,
+                          width: productColWidth,
+                          minWidth: productColWidth,
+                          maxWidth: productColWidth,
+                        }}
                       >
                         <div className="truncate" title={p.product}>
                           {p.product}
@@ -704,11 +915,61 @@ export default function MatrixPage() {
                         )}
                       </td>
                       <td
-                        title={p.rrpAt ? `RRP as of ${new Date(p.rrpAt).toLocaleDateString()}` : undefined}
-                        className={`sticky z-10 border-r border-gray-200 px-3 py-2 text-right align-top tabular-nums text-gray-500 group-hover:bg-gray-50 ${rowBg}`}
-                        style={{ left: productColWidth }}
+                        title={
+                          isEditingRrp
+                            ? undefined
+                            : p.rrpAt
+                            ? `RRP as of ${new Date(p.rrpAt).toLocaleDateString()} - click to edit`
+                            : "Click to set an RRP"
+                        }
+                        onClick={() => !isEditingRrp && startRrpEdit(p.key, p.rrp)}
+                        className={`sticky z-10 border-r border-gray-200 px-3 py-2 text-right align-top tabular-nums text-gray-500 group-hover:bg-gray-50 ${rowBg} ${
+                          isEditingRrp ? "" : "cursor-pointer hover:underline"
+                        }`}
+                        style={{ left: CHECKBOX_COL_WIDTH + productColWidth }}
                       >
-                        {p.rrp != null ? (
+                        {isEditingRrp ? (
+                          <div
+                            className="flex flex-col items-end gap-1 normal-case"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <input
+                              autoFocus
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              placeholder="Blank clears RRP"
+                              className="input w-24 text-right text-xs tabular-nums"
+                              value={rrpDraft}
+                              onChange={(e) => setRrpDraft(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") saveRrpEdit();
+                                if (e.key === "Escape") cancelRrpEdit();
+                              }}
+                            />
+                            <div className="flex gap-2">
+                              <button
+                                onClick={saveRrpEdit}
+                                disabled={savingRrp}
+                                className="text-[10px] font-medium text-gray-900 hover:underline disabled:opacity-50"
+                              >
+                                {savingRrp ? "Saving…" : "Save"}
+                              </button>
+                              <button
+                                onClick={cancelRrpEdit}
+                                disabled={savingRrp}
+                                className="text-[10px] text-gray-400 hover:underline"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                            {rrpError && (
+                              <div className="max-w-[8rem] whitespace-normal text-[10px] text-red-600">
+                                {rrpError}
+                              </div>
+                            )}
+                          </div>
+                        ) : p.rrp != null ? (
                           <>
                             {p.rrp.toFixed(2)} {p.rrpCurrency}
                           </>
@@ -777,14 +1038,16 @@ export default function MatrixPage() {
       )}
       {!loading && brand && products.length > 0 && (
         <p className="text-xs text-gray-400">
-          Drag the right edge of the Product column header to resize it. RRP shown when at least
-          one offer for that product includes one. Each price shows its discount vs that row&apos;s
-          RRP underneath - red means the price is above RRP.
-          &quot;Updated&quot; under each supplier is when their most recent price for this brand
-          was added. Click any price to edit that offer, or hover the product name to see it in
-          full. Next to a supplier name, ✎ renames it everywhere (across every brand, not just
-          this one), and 🗑 deletes all of that supplier&apos;s offers for this brand only. Hover
-          a price for its exact date.{" "}
+          Drag the right edge of the Product column header to resize it. Click any RRP to edit or
+          clear it - this updates that value across every supplier for the product, not just one
+          offer. Check rows and use &quot;Delete selected&quot; to bulk-delete every offer for
+          those products (across all suppliers) - handy for clearing out bad imported data. Each
+          price shows its discount vs that row&apos;s RRP underneath - red means the price is
+          above RRP. &quot;Updated&quot; under each supplier is when their most recent price for
+          this brand was added. Click any price to edit that offer, or hover the product name to
+          see it in full. Next to a supplier name, ✎ renames it everywhere (across every brand,
+          not just this one), and 🗑 deletes all of that supplier&apos;s offers for this brand
+          only. Hover a price for its exact date.{" "}
           <span className="inline-block h-1.5 w-1.5 rounded-full bg-blue-500 align-middle" /> and
           blue text mark today.
         </p>
