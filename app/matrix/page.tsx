@@ -54,6 +54,56 @@ async function mapWithConcurrency<T, R>(
   return results;
 }
 
+// Exports every offer currently loaded for the selected brand - i.e. every
+// supplier's price for that brand, not just what the matrix grid happens to
+// display - as a real .xlsx (via the SheetJS "xlsx" package, same one used
+// by the smart import wizard to read uploads), so it opens straight into
+// Excel with numeric price/RRP cells rather than text.
+async function downloadOffersXlsx(filename: string, offers: Offer[]) {
+  const XLSX = await import("xlsx");
+
+  const data = offers.map((o) => ({
+    Supplier: o.supplier,
+    Brand: o.brand,
+    Product: o.product,
+    SKU: o.sku ?? "",
+    Price: o.price,
+    Currency: o.currency,
+    RRP: o.rrp ?? "",
+    MOQ: o.moq ?? "",
+    "Lead time": o.leadTimeDays ?? "",
+    "Payment terms": o.paymentTerms ?? "",
+    Region: o.region ?? "",
+    Incoterm: o.incoterm ?? "",
+    "Market origin": o.marketOrigin ?? "",
+    Notes: o.notes ?? "",
+    Added: new Date(o.createdAt).toLocaleDateString(),
+  }));
+
+  const sheet = XLSX.utils.json_to_sheet(data);
+  sheet["!cols"] = [
+    { wch: 20 }, // Supplier
+    { wch: 18 }, // Brand
+    { wch: 32 }, // Product
+    { wch: 16 }, // SKU
+    { wch: 10 }, // Price
+    { wch: 10 }, // Currency
+    { wch: 10 }, // RRP
+    { wch: 8 }, // MOQ
+    { wch: 14 }, // Lead time
+    { wch: 18 }, // Payment terms
+    { wch: 12 }, // Region
+    { wch: 14 }, // Incoterm
+    { wch: 14 }, // Market origin
+    { wch: 30 }, // Notes
+    { wch: 12 }, // Added
+  ];
+
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, sheet, "Offers");
+  XLSX.writeFile(workbook, filename);
+}
+
 export default function MatrixPage() {
   const [brands, setBrands] = useState<{ brand: string; count: number }[]>([]);
   const [brand, setBrand] = useState("");
@@ -326,6 +376,14 @@ export default function MatrixPage() {
         setTruncated((data.total ?? 0) > (data.offers?.length ?? 0));
         setLoading(false);
       });
+  };
+
+  const handleDownloadBrandXlsx = () => {
+    if (!brand || offers.length === 0) return;
+    // Sanitize for use in a filename - brand names can contain slashes,
+    // periods, etc. picked up from messy source spreadsheets.
+    const safeBrand = brand.trim().replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-+|-+$/g, "") || "brand";
+    downloadOffersXlsx(`${safeBrand}-prices-${new Date().toISOString().slice(0, 10)}.xlsx`, offers);
   };
 
   useEffect(() => {
@@ -641,6 +699,14 @@ export default function MatrixPage() {
               className="text-gray-400 hover:text-gray-700"
             >
               ✎ Rename brand
+            </button>
+          )}
+          {brand && offers.length > 0 && (
+            <button
+              onClick={handleDownloadBrandXlsx}
+              className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50"
+            >
+              Download Excel ({offers.length.toLocaleString()})
             </button>
           )}
           {brandSearch && (
