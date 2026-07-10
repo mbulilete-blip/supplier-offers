@@ -115,13 +115,12 @@ export default function MatrixPage() {
   const [truncated, setTruncated] = useState(false);
   const [editingOffer, setEditingOffer] = useState<Offer | null>(null);
 
-  // Which suppliers' columns to show for the current brand. Empty set means
-  // "show all" (the common case) - a non-empty set is treated as an explicit
-  // allow-list, so unchecking one supplier out of many doesn't require
-  // re-checking every other one first.
-  const [supplierFilter, setSupplierFilter] = useState<Set<string>>(new Set());
-  const [supplierFilterOpen, setSupplierFilterOpen] = useState(false);
-  const [supplierFilterSearch, setSupplierFilterSearch] = useState("");
+  // Per-column price filter, Excel-style: clicking the filter icon in a
+  // supplier's column header narrows the grid to only the product rows where
+  // that supplier actually quoted a price. Multiple active columns combine
+  // with AND - a row must have a price under every active supplier to stay
+  // visible, same as stacking column filters in Excel.
+  const [priceFilterSuppliers, setPriceFilterSuppliers] = useState<Set<string>>(new Set());
 
   // Drag-to-resize for the sticky Product column - default (224px) matches
   // the old fixed w-56 class exactly, so nothing shifts until the user drags.
@@ -398,22 +397,9 @@ export default function MatrixPage() {
     fetchOffers();
     setSelectedKeys(new Set());
     setEditingRrpKey(null);
-    setSupplierFilter(new Set());
-    setSupplierFilterOpen(false);
-    setSupplierFilterSearch("");
+    setPriceFilterSuppliers(new Set());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [brand]);
-
-  // Full supplier list for this brand, independent of the column filter
-  // below - this is what populates the filter checklist itself, so the
-  // options never shrink to match whatever's currently filtered.
-  const allBrandSuppliers = useMemo(
-    () =>
-      Array.from(new Set(offers.map((o) => o.supplier))).sort((a, b) =>
-        a.localeCompare(b, undefined, { sensitivity: "base" })
-      ),
-    [offers]
-  );
 
   const { products, suppliers, cellPrice, supplierLastUpdated, bestSupplierRanking, contestedCount } = useMemo(() => {
     const supplierSet = new Set<string>();
@@ -430,9 +416,6 @@ export default function MatrixPage() {
     const lastUpdated = new Map<string, string>();
 
     for (const o of offers) {
-      // Column filter: an empty set means "show all"; otherwise treat it as
-      // an allow-list and skip any offer from a supplier that's unchecked.
-      if (supplierFilter.size > 0 && !supplierFilter.has(o.supplier)) continue;
       // Group by SKU/EAN alone when one is present - that's the real product
       // identity. Suppliers often type the product name slightly differently
       // (e.g. "OUD MINERALE 100ML" vs "OUD MINERALE EDP 100ML/3.4FLOZ") for
@@ -521,7 +504,22 @@ export default function MatrixPage() {
       bestSupplierRanking,
       contestedCount,
     };
-  }, [offers, supplierFilter]);
+  }, [offers]);
+
+  // Rows to actually render once the per-column price filters are applied -
+  // a product stays visible only if it has a price from every supplier
+  // currently filtered on (AND across columns, same as Excel autofilter).
+  const filteredProducts = useMemo(() => {
+    if (priceFilterSuppliers.size === 0) return products;
+    return products.filter((p) => {
+      const bySupplier = cellPrice.get(p.key);
+      if (!bySupplier) return false;
+      for (const s of priceFilterSuppliers) {
+        if (!bySupplier.has(s)) return false;
+      }
+      return true;
+    });
+  }, [products, cellPrice, priceFilterSuppliers]);
 
   // Row selection (keyed the same way as the Product rows above - SKU if
   // present, else lowercased/trimmed product name) for bulk delete. Cleared
@@ -539,12 +537,15 @@ export default function MatrixPage() {
   };
 
   const toggleSelectAll = () => {
+    // Select-all only ever acts on the currently visible (filtered) rows -
+    // selecting "all" shouldn't silently include rows hidden by a column
+    // price filter.
     setSelectedKeys((prev) =>
-      prev.size === products.length ? new Set() : new Set(products.map((p) => p.key))
+      prev.size === filteredProducts.length ? new Set() : new Set(filteredProducts.map((p) => p.key))
     );
   };
 
-  const allSelected = products.length > 0 && selectedKeys.size === products.length;
+  const allSelected = filteredProducts.length > 0 && selectedKeys.size === filteredProducts.length;
   const someSelected = selectedKeys.size > 0 && !allSelected;
 
   const [deletingSelected, setDeletingSelected] = useState(false);
@@ -734,15 +735,6 @@ export default function MatrixPage() {
               Download Excel ({offers.length.toLocaleString()})
             </button>
           )}
-          {brand && allBrandSuppliers.length > 0 && (
-            <button
-              onClick={() => setSupplierFilterOpen((v) => !v)}
-              className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50"
-            >
-              Filter suppliers
-              {supplierFilter.size > 0 ? ` (${supplierFilter.size}/${allBrandSuppliers.length})` : ""}
-            </button>
-          )}
           {brandSearch && (
             <span className="text-xs text-gray-400">
               {filteredBrands.length} of {brands.length} brand{brands.length === 1 ? "" : "s"}
@@ -754,65 +746,15 @@ export default function MatrixPage() {
 
       {brandRenameNotice && <p className="text-xs text-green-700">{brandRenameNotice}</p>}
 
-      {brand && supplierFilterOpen && allBrandSuppliers.length > 0 && (
-        <div className="rounded-xl border border-gray-200 bg-white p-3">
-          <div className="mb-2 flex flex-wrap items-center gap-2">
-            <input
-              type="text"
-              className="input w-48 text-xs"
-              placeholder="Search suppliers…"
-              value={supplierFilterSearch}
-              onChange={(e) => setSupplierFilterSearch(e.target.value)}
-            />
-            <button
-              onClick={() => setSupplierFilter(new Set(allBrandSuppliers))}
-              className="text-xs text-gray-500 hover:underline"
-            >
-              Select all
-            </button>
-            <button
-              onClick={() => setSupplierFilter(new Set())}
-              className="text-xs text-gray-500 hover:underline"
-            >
-              Show all
-            </button>
-            <button
-              onClick={() => setSupplierFilterOpen(false)}
-              className="ml-auto text-xs text-gray-400 hover:underline"
-            >
-              Close
-            </button>
-          </div>
-          <div className="flex max-h-48 flex-wrap gap-x-4 gap-y-1.5 overflow-auto">
-            {fuzzyFilterSort(allBrandSuppliers, supplierFilterSearch, (s) => s).map((s) => (
-              <label key={s} className="flex items-center gap-1.5 text-xs text-gray-700">
-                <input
-                  type="checkbox"
-                  checked={supplierFilter.size === 0 || supplierFilter.has(s)}
-                  onChange={() => {
-                    setSupplierFilter((prev) => {
-                      // Starting from "show all" (empty set), the first
-                      // uncheck seeds the set with every other supplier still
-                      // checked, so unchecking one doesn't hide everything.
-                      const next = prev.size === 0 ? new Set(allBrandSuppliers) : new Set(prev);
-                      if (next.has(s)) next.delete(s);
-                      else next.add(s);
-                      return next;
-                    });
-                  }}
-                />
-                {s}
-              </label>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {brand && supplierFilter.size > 0 && (
+      {brand && priceFilterSuppliers.size > 0 && (
         <p className="text-xs text-gray-500">
-          Showing {supplierFilter.size} of {allBrandSuppliers.length} suppliers -{" "}
-          <button onClick={() => setSupplierFilter(new Set())} className="underline hover:text-gray-700">
-            show all
+          Showing {filteredProducts.length} of {products.length} products - priced by{" "}
+          <span className="font-medium text-gray-700">{Array.from(priceFilterSuppliers).join(", ")}</span> -{" "}
+          <button
+            onClick={() => setPriceFilterSuppliers(new Set())}
+            className="underline hover:text-gray-700"
+          >
+            clear filter
           </button>
         </p>
       )}
@@ -996,6 +938,28 @@ export default function MatrixPage() {
                             </span>
                             <span className="flex shrink-0 items-center gap-1">
                               <button
+                                onClick={() => {
+                                  setPriceFilterSuppliers((prev) => {
+                                    const next = new Set(prev);
+                                    if (next.has(s)) next.delete(s);
+                                    else next.add(s);
+                                    return next;
+                                  });
+                                }}
+                                title={
+                                  priceFilterSuppliers.has(s)
+                                    ? `Filtered to products priced by "${s}" - click to clear`
+                                    : `Show only products priced by "${s}"`
+                                }
+                                className={
+                                  priceFilterSuppliers.has(s)
+                                    ? "font-normal normal-case text-blue-600"
+                                    : "font-normal normal-case text-gray-300 hover:text-gray-600"
+                                }
+                              >
+                                ▾
+                              </button>
+                              <button
                                 onClick={() => startRename(s)}
                                 title="Rename this supplier everywhere"
                                 className="text-gray-300 hover:text-gray-600"
@@ -1028,7 +992,20 @@ export default function MatrixPage() {
                 </tr>
               </thead>
               <tbody>
-                {products.map((p, rowIdx) => {
+                {filteredProducts.length === 0 && (
+                  <tr>
+                    <td colSpan={3 + suppliers.length} className="px-3 py-6 text-center text-xs text-gray-400">
+                      No products priced by every filtered supplier.{" "}
+                      <button
+                        onClick={() => setPriceFilterSuppliers(new Set())}
+                        className="underline hover:text-gray-600"
+                      >
+                        Clear filter
+                      </button>
+                    </td>
+                  </tr>
+                )}
+                {filteredProducts.map((p, rowIdx) => {
                   const bySupplier = cellPrice.get(p.key);
                   let bestSupplier: string | null = null;
                   let bestPrice = Infinity;
