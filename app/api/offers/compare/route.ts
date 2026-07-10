@@ -6,8 +6,11 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 // Cap how many distinct rows we'll run a market-comparison lookup for in one
-// request, to keep this fast and inside the function time limit.
-const MAX_COMPARE_ROWS = 5000;
+// request, purely as a safety valve against a truly pathological upload -
+// the actual lookup is two set-based queries (unnest + join), not one query
+// per row, so it comfortably scales well past any realistic supplier price
+// list within the function time limit.
+const MAX_COMPARE_ROWS = 100000;
 
 export type CompareRow = {
   supplier: string;

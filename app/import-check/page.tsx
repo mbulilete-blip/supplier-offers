@@ -46,6 +46,63 @@ const VERDICT_CLASS: Record<CompareRow["verdict"], string> = {
   new: "bg-blue-50 text-blue-700",
 };
 
+function downloadCsv(filename: string, csv: string) {
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+const csvExportEscape = (v: unknown): string => {
+  if (v === null || v === undefined) return "";
+  const s = String(v);
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+};
+
+// Exports whichever verdict tab is currently active (e.g. just the "cheaper
+// than market" rows), not the full unfiltered result set - the filter tabs
+// already narrow to what the user is looking at, and the download should
+// match what's on screen.
+function buildCompareCsv(rows: CompareRow[]): string {
+  const headers = [
+    "Product",
+    "Brand",
+    "SKU",
+    "Supplier",
+    "New price",
+    "Currency",
+    "Current best price",
+    "Best currency",
+    "Best supplier",
+    "Verdict",
+  ];
+  const lines = [headers.join(",")];
+  for (const r of rows) {
+    lines.push(
+      [
+        r.product,
+        r.brand,
+        r.sku ?? "",
+        r.supplier,
+        r.price.toFixed(2),
+        r.currency,
+        r.marketBestPrice !== null ? r.marketBestPrice.toFixed(2) : "",
+        r.marketBestCurrency ?? "",
+        r.marketBestSupplier ?? "",
+        VERDICT_LABEL[r.verdict],
+      ]
+        .map(csvExportEscape)
+        .join(",")
+    );
+  }
+  return lines.join("\n");
+}
+
 const ROLE_OPTIONS: ColumnRole[] = [
   "ignore",
   "supplier",
@@ -236,6 +293,15 @@ export default function ImportCheckPage() {
   };
 
   const filteredRows = result ? result.rows.filter((r) => filter === "all" || r.verdict === filter) : [];
+
+  const handleExportFiltered = () => {
+    if (filteredRows.length === 0) return;
+    const suffix = filter === "all" ? "all" : filter;
+    downloadCsv(
+      `price-check-${suffix}-${new Date().toISOString().slice(0, 10)}.csv`,
+      buildCompareCsv(filteredRows)
+    );
+  };
 
   const headerRowPreview = rows.slice(0, Math.min(10, rows.length));
 
@@ -529,22 +595,31 @@ export default function ImportCheckPage() {
 
       {result && (
         <section className="space-y-4">
-          <div className="flex flex-wrap gap-2 text-sm">
-            {(["all", "cheaper", "matches", "higher", "new"] as const).map((v) => (
-              <button
-                key={v}
-                onClick={() => setFilter(v)}
-                className={`rounded-full border px-3 py-1.5 ${
-                  filter === v
-                    ? "border-gray-900 bg-gray-900 text-white"
-                    : "border-gray-300 text-gray-600 hover:border-gray-400"
-                }`}
-              >
-                {v === "all"
-                  ? `All (${result.summary.total})`
-                  : `${VERDICT_LABEL[v]} (${result.summary[v]})`}
-              </button>
-            ))}
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap gap-2 text-sm">
+              {(["all", "cheaper", "matches", "higher", "new"] as const).map((v) => (
+                <button
+                  key={v}
+                  onClick={() => setFilter(v)}
+                  className={`rounded-full border px-3 py-1.5 ${
+                    filter === v
+                      ? "border-gray-900 bg-gray-900 text-white"
+                      : "border-gray-300 text-gray-600 hover:border-gray-400"
+                  }`}
+                >
+                  {v === "all"
+                    ? `All (${result.summary.total})`
+                    : `${VERDICT_LABEL[v]} (${result.summary[v]})`}
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={handleExportFiltered}
+              disabled={filteredRows.length === 0}
+              className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+            >
+              Download {filter === "all" ? "all" : VERDICT_LABEL[filter].toLowerCase()} ({filteredRows.length})
+            </button>
           </div>
 
           {result.truncated && (
