@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Offer } from "@/lib/types";
 import EditOfferModal from "@/components/EditOfferModal";
+import { fuzzyFilterSort } from "@/lib/fuzzyMatch";
 
 const isToday = (iso: string): boolean => {
   const d = new Date(iso);
@@ -226,11 +227,13 @@ export default function MatrixPage() {
   const [brandRenameError, setBrandRenameError] = useState<string | null>(null);
   const [brandRenameNotice, setBrandRenameNotice] = useState<string | null>(null);
 
-  const filteredBrands = useMemo(() => {
-    const q = brandSearch.trim().toLowerCase();
-    if (!q) return brands;
-    return brands.filter((b) => b.brand.toLowerCase().includes(q));
-  }, [brands, brandSearch]);
+  // Fuzzy (case/punctuation/typo-tolerant) so e.g. "matiere premiere" also
+  // surfaces "MATIERE PREMIERE." or "Materia Premiere", and "mesoestetic"
+  // matches both "MESOESTETIC" and "MESOESTETIC.".
+  const filteredBrands = useMemo(
+    () => fuzzyFilterSort(brands, brandSearch, (b) => b.brand),
+    [brands, brandSearch]
+  );
 
   // Keep the currently selected brand in the option list even if it no
   // longer matches the search text - otherwise typing after picking a brand

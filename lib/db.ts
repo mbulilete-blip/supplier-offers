@@ -218,7 +218,10 @@ export async function getRecentOffers(limit = 10): Promise<Offer[]> {
 export async function listBrands(): Promise<{ brand: string; count: number }[]> {
   await ensureSchema();
   const { rows } = await getPool().query(
-    `SELECT brand, COUNT(*)::int AS count FROM offers GROUP BY brand ORDER BY brand ASC;`
+    // Case-insensitive so e.g. "Malibu C" sorts next to "MAISON MARGIELA"
+    // instead of every ALL-CAPS brand grouping before any mixed-case one
+    // (plain ASCII/byte ordering puts uppercase letters before lowercase).
+    `SELECT brand, COUNT(*)::int AS count FROM offers GROUP BY brand ORDER BY lower(brand) ASC, brand ASC;`
   );
   return rows.map((r) => ({ brand: r.brand, count: r.count }));
 }
@@ -228,7 +231,8 @@ export async function listBrands(): Promise<{ brand: string; count: number }[]> 
 export async function listSuppliers(): Promise<{ supplier: string; count: number }[]> {
   await ensureSchema();
   const { rows } = await getPool().query(
-    `SELECT supplier, COUNT(*)::int AS count FROM offers GROUP BY supplier ORDER BY supplier ASC;`
+    // Case-insensitive - see the matching comment in listBrands().
+    `SELECT supplier, COUNT(*)::int AS count FROM offers GROUP BY supplier ORDER BY lower(supplier) ASC, supplier ASC;`
   );
   return rows.map((r) => ({ supplier: r.supplier, count: r.count }));
 }
