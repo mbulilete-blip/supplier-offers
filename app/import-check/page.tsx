@@ -46,61 +46,45 @@ const VERDICT_CLASS: Record<CompareRow["verdict"], string> = {
   new: "bg-blue-50 text-blue-700",
 };
 
-function downloadCsv(filename: string, csv: string) {
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-}
-
-const csvExportEscape = (v: unknown): string => {
-  if (v === null || v === undefined) return "";
-  const s = String(v);
-  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-};
-
 // Exports whichever verdict tab is currently active (e.g. just the "cheaper
 // than market" rows), not the full unfiltered result set - the filter tabs
 // already narrow to what the user is looking at, and the download should
-// match what's on screen.
-function buildCompareCsv(rows: CompareRow[]): string {
-  const headers = [
-    "Product",
-    "Brand",
-    "SKU",
-    "Supplier",
-    "New price",
-    "Currency",
-    "Current best price",
-    "Best currency",
-    "Best supplier",
-    "Verdict",
+// match what's on screen. Real .xlsx (via the SheetJS "xlsx" package already
+// used elsewhere in this file to read uploads), not CSV, so it opens
+// straight into Excel with proper column widths and numeric price cells.
+async function downloadCompareXlsx(filename: string, rows: CompareRow[]) {
+  const XLSX = await import("xlsx");
+
+  const data = rows.map((r) => ({
+    Product: r.product,
+    Brand: r.brand,
+    SKU: r.sku ?? "",
+    Supplier: r.supplier,
+    "New price": r.price,
+    Currency: r.currency,
+    "Current best price": r.marketBestPrice ?? "",
+    "Best currency": r.marketBestCurrency ?? "",
+    "Best supplier": r.marketBestSupplier ?? "",
+    Verdict: VERDICT_LABEL[r.verdict],
+  }));
+
+  const sheet = XLSX.utils.json_to_sheet(data);
+  sheet["!cols"] = [
+    { wch: 32 }, // Product
+    { wch: 20 }, // Brand
+    { wch: 16 }, // SKU
+    { wch: 20 }, // Supplier
+    { wch: 12 }, // New price
+    { wch: 10 }, // Currency
+    { wch: 16 }, // Current best price
+    { wch: 12 }, // Best currency
+    { wch: 20 }, // Best supplier
+    { wch: 18 }, // Verdict
   ];
-  const lines = [headers.join(",")];
-  for (const r of rows) {
-    lines.push(
-      [
-        r.product,
-        r.brand,
-        r.sku ?? "",
-        r.supplier,
-        r.price.toFixed(2),
-        r.currency,
-        r.marketBestPrice !== null ? r.marketBestPrice.toFixed(2) : "",
-        r.marketBestCurrency ?? "",
-        r.marketBestSupplier ?? "",
-        VERDICT_LABEL[r.verdict],
-      ]
-        .map(csvExportEscape)
-        .join(",")
-    );
-  }
-  return lines.join("\n");
+
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, sheet, "Price check");
+  XLSX.writeFile(workbook, filename);
 }
 
 const ROLE_OPTIONS: ColumnRole[] = [
@@ -297,10 +281,7 @@ export default function ImportCheckPage() {
   const handleExportFiltered = () => {
     if (filteredRows.length === 0) return;
     const suffix = filter === "all" ? "all" : filter;
-    downloadCsv(
-      `price-check-${suffix}-${new Date().toISOString().slice(0, 10)}.csv`,
-      buildCompareCsv(filteredRows)
-    );
+    downloadCompareXlsx(`price-check-${suffix}-${new Date().toISOString().slice(0, 10)}.xlsx`, filteredRows);
   };
 
   const headerRowPreview = rows.slice(0, Math.min(10, rows.length));
@@ -618,7 +599,7 @@ export default function ImportCheckPage() {
               disabled={filteredRows.length === 0}
               className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50"
             >
-              Download {filter === "all" ? "all" : VERDICT_LABEL[filter].toLowerCase()} ({filteredRows.length})
+              Download Excel — {filter === "all" ? "all" : VERDICT_LABEL[filter].toLowerCase()} ({filteredRows.length})
             </button>
           </div>
 
