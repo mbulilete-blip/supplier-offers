@@ -115,6 +115,14 @@ export default function MatrixPage() {
   const [truncated, setTruncated] = useState(false);
   const [editingOffer, setEditingOffer] = useState<Offer | null>(null);
 
+  // Which suppliers' columns to show for the current brand. Empty set means
+  // "show all" (the common case) - a non-empty set is treated as an explicit
+  // allow-list, so unchecking one supplier out of many doesn't require
+  // re-checking every other one first.
+  const [supplierFilter, setSupplierFilter] = useState<Set<string>>(new Set());
+  const [supplierFilterOpen, setSupplierFilterOpen] = useState(false);
+  const [supplierFilterSearch, setSupplierFilterSearch] = useState("");
+
   // Drag-to-resize for the sticky Product column - default (224px) matches
   // the old fixed w-56 class exactly, so nothing shifts until the user drags.
   // The RRP column is also sticky and sits right after Product, so its left
@@ -390,8 +398,22 @@ export default function MatrixPage() {
     fetchOffers();
     setSelectedKeys(new Set());
     setEditingRrpKey(null);
+    setSupplierFilter(new Set());
+    setSupplierFilterOpen(false);
+    setSupplierFilterSearch("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [brand]);
+
+  // Full supplier list for this brand, independent of the column filter
+  // below - this is what populates the filter checklist itself, so the
+  // options never shrink to match whatever's currently filtered.
+  const allBrandSuppliers = useMemo(
+    () =>
+      Array.from(new Set(offers.map((o) => o.supplier))).sort((a, b) =>
+        a.localeCompare(b, undefined, { sensitivity: "base" })
+      ),
+    [offers]
+  );
 
   const { products, suppliers, cellPrice, supplierLastUpdated, bestSupplierRanking, contestedCount } = useMemo(() => {
     const supplierSet = new Set<string>();
@@ -408,6 +430,9 @@ export default function MatrixPage() {
     const lastUpdated = new Map<string, string>();
 
     for (const o of offers) {
+      // Column filter: an empty set means "show all"; otherwise treat it as
+      // an allow-list and skip any offer from a supplier that's unchecked.
+      if (supplierFilter.size > 0 && !supplierFilter.has(o.supplier)) continue;
       // Group by SKU/EAN alone when one is present - that's the real product
       // identity. Suppliers often type the product name slightly differently
       // (e.g. "OUD MINERALE 100ML" vs "OUD MINERALE EDP 100ML/3.4FLOZ") for
@@ -496,7 +521,7 @@ export default function MatrixPage() {
       bestSupplierRanking,
       contestedCount,
     };
-  }, [offers]);
+  }, [offers, supplierFilter]);
 
   // Row selection (keyed the same way as the Product rows above - SKU if
   // present, else lowercased/trimmed product name) for bulk delete. Cleared
@@ -709,6 +734,15 @@ export default function MatrixPage() {
               Download Excel ({offers.length.toLocaleString()})
             </button>
           )}
+          {brand && allBrandSuppliers.length > 0 && (
+            <button
+              onClick={() => setSupplierFilterOpen((v) => !v)}
+              className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50"
+            >
+              Filter suppliers
+              {supplierFilter.size > 0 ? ` (${supplierFilter.size}/${allBrandSuppliers.length})` : ""}
+            </button>
+          )}
           {brandSearch && (
             <span className="text-xs text-gray-400">
               {filteredBrands.length} of {brands.length} brand{brands.length === 1 ? "" : "s"}
@@ -719,6 +753,69 @@ export default function MatrixPage() {
       )}
 
       {brandRenameNotice && <p className="text-xs text-green-700">{brandRenameNotice}</p>}
+
+      {brand && supplierFilterOpen && allBrandSuppliers.length > 0 && (
+        <div className="rounded-xl border border-gray-200 bg-white p-3">
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            <input
+              type="text"
+              className="input w-48 text-xs"
+              placeholder="Search suppliers…"
+              value={supplierFilterSearch}
+              onChange={(e) => setSupplierFilterSearch(e.target.value)}
+            />
+            <button
+              onClick={() => setSupplierFilter(new Set(allBrandSuppliers))}
+              className="text-xs text-gray-500 hover:underline"
+            >
+              Select all
+            </button>
+            <button
+              onClick={() => setSupplierFilter(new Set())}
+              className="text-xs text-gray-500 hover:underline"
+            >
+              Show all
+            </button>
+            <button
+              onClick={() => setSupplierFilterOpen(false)}
+              className="ml-auto text-xs text-gray-400 hover:underline"
+            >
+              Close
+            </button>
+          </div>
+          <div className="flex max-h-48 flex-wrap gap-x-4 gap-y-1.5 overflow-auto">
+            {fuzzyFilterSort(allBrandSuppliers, supplierFilterSearch, (s) => s).map((s) => (
+              <label key={s} className="flex items-center gap-1.5 text-xs text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={supplierFilter.size === 0 || supplierFilter.has(s)}
+                  onChange={() => {
+                    setSupplierFilter((prev) => {
+                      // Starting from "show all" (empty set), the first
+                      // uncheck seeds the set with every other supplier still
+                      // checked, so unchecking one doesn't hide everything.
+                      const next = prev.size === 0 ? new Set(allBrandSuppliers) : new Set(prev);
+                      if (next.has(s)) next.delete(s);
+                      else next.add(s);
+                      return next;
+                    });
+                  }}
+                />
+                {s}
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {brand && supplierFilter.size > 0 && (
+        <p className="text-xs text-gray-500">
+          Showing {supplierFilter.size} of {allBrandSuppliers.length} suppliers -{" "}
+          <button onClick={() => setSupplierFilter(new Set())} className="underline hover:text-gray-700">
+            show all
+          </button>
+        </p>
+      )}
 
       {!brand && <p className="text-sm text-gray-400">Choose a brand above to build the matrix.</p>}
 
