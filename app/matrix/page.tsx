@@ -973,7 +973,13 @@ export default function MatrixPage() {
               </button>
             </div>
           )}
-          <div className="overflow-auto rounded-xl border border-gray-200 bg-white">
+          {/* max-h + overflow-auto turns this into its own scroll region (both
+              axes) so the supplier header row below can use position: sticky
+              to stay pinned at the top while scrolling down through prices -
+              same pattern as the Names page list. Without a bounded height
+              here, this div never scrolls internally (the window does
+              instead), and sticky positioning has nothing to stick to. */}
+          <div className="max-h-[75vh] overflow-auto rounded-xl border border-gray-200 bg-white">
             {/* table-fixed + colgroup gives every column a real, stable width
                 up front. With the old auto layout, a supplier name that could
                 wrap (to avoid overlapping the price column) let the browser
@@ -995,10 +1001,10 @@ export default function MatrixPage() {
                   <col key={s} className="w-40" />
                 ))}
               </colgroup>
-              <thead className="border-b border-gray-200 bg-gray-50 uppercase tracking-wide text-gray-500">
+              <thead className="uppercase tracking-wide text-gray-500">
                 <tr>
                   <th
-                    className="sticky left-0 z-10 border-r border-gray-200 bg-gray-50 px-2 py-2 align-top"
+                    className="sticky left-0 top-0 z-30 border-b border-r border-gray-200 bg-gray-50 px-2 py-2 align-top"
                     style={{ width: CHECKBOX_COL_WIDTH, minWidth: CHECKBOX_COL_WIDTH, maxWidth: CHECKBOX_COL_WIDTH }}
                   >
                     <input
@@ -1012,7 +1018,7 @@ export default function MatrixPage() {
                     />
                   </th>
                   <th
-                    className="sticky z-10 border-r border-gray-200 bg-gray-50 px-3 py-2 align-top relative"
+                    className="sticky top-0 z-30 border-b border-r border-gray-200 bg-gray-50 px-3 py-2 align-top relative"
                     style={{
                       left: CHECKBOX_COL_WIDTH,
                       width: productColWidth,
@@ -1033,7 +1039,7 @@ export default function MatrixPage() {
                     />
                   </th>
                   <th
-                    className="sticky z-10 border-r border-gray-200 bg-gray-50 px-3 py-2 text-right align-top"
+                    className="sticky top-0 z-30 border-b border-r border-gray-200 bg-gray-50 px-3 py-2 text-right align-top"
                     style={{ left: CHECKBOX_COL_WIDTH + productColWidth }}
                   >
                     RRP
@@ -1042,7 +1048,10 @@ export default function MatrixPage() {
                     const updated = supplierLastUpdated.get(s);
                     const isRenaming = renamingSupplier === s;
                     return (
-                      <th key={s} className="px-3 py-2 text-right align-top">
+                      <th
+                        key={s}
+                        className="sticky top-0 z-20 border-b border-gray-200 bg-gray-50 px-3 py-2 text-right align-top"
+                      >
                         {isRenaming ? (
                           <div className="flex flex-col items-end gap-1 normal-case">
                             <input
