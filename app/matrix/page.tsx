@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Offer } from "@/lib/types";
 import EditOfferModal from "@/components/EditOfferModal";
 import { fuzzyFilterSort } from "@/lib/fuzzyMatch";
+import { toEur, EurRates } from "@/lib/currency";
 
 const isToday = (iso: string): boolean => {
   const d = new Date(iso);
@@ -127,6 +128,20 @@ export default function MatrixPage() {
   const [loading, setLoading] = useState(false);
   const [truncated, setTruncated] = useState(false);
   const [editingOffer, setEditingOffer] = useState<Offer | null>(null);
+
+  // EUR conversion rates (see lib/currency.ts) - suppliers quote in EUR,
+  // USD, GBP, CHF, or AED, and ranking/coloring/RRP-discount % all need a
+  // single currency to compare in. Defaults to EUR-only (1:1) until the
+  // real rates load, so nothing crashes on first paint; loaded once per
+  // page visit since exchange rates don't move fast enough to need
+  // per-render refetching.
+  const [eurRates, setEurRates] = useState<EurRates>({ EUR: 1 });
+
+  useEffect(() => {
+    fetch("/api/fx-rates")
+      .then((r) => r.json())
+      .then((data) => setEurRates((prev) => (data && typeof data === "object" ? data : prev)));
+  }, []);
 
   // Per-column price filter, Excel-style: clicking the filter icon in a
   // supplier's column header narrows the grid to only the product rows where
@@ -542,8 +557,12 @@ export default function MatrixPage() {
       let bestSupplier: string | null = null;
       let bestPrice = Infinity;
       for (const [s, o] of bySupplier.entries()) {
-        if (o.price < bestPrice) {
-          bestPrice = o.price;
+        // Compare in EUR, not raw quoted amounts - suppliers quoting in
+        // different currencies (EUR/USD/GBP/CHF/AED) can't be ranked by
+        // face value alone. See lib/currency.ts.
+        const priceEur = toEur(o.price, o.currency, eurRates);
+        if (priceEur < bestPrice) {
+          bestPrice = priceEur;
           bestSupplier = s;
         }
       }
@@ -561,7 +580,7 @@ export default function MatrixPage() {
       bestSupplierRanking,
       contestedCount,
     };
-  }, [offers]);
+  }, [offers, eurRates]);
 
   // Distinct availability values seen across this brand's offers (e.g.
   // "In Stock", "Preorder"), used to build the filter toggle buttons - only
@@ -1173,12 +1192,17 @@ export default function MatrixPage() {
                   // rank against, so its cell stays uncolored.
                   const rankBySupplier = new Map<string, { rank: number; size: number }>();
                   if (bySupplier && bySupplier.size > 1) {
-                    const sorted = Array.from(bySupplier.entries()).sort((a, b) => a[1].price - b[1].price);
+                    // Sort/tie-break in EUR - a "13.89 EUR" and "14.43 USD"
+                    // quote can't be ranked by face value (see lib/currency.ts).
+                    const sorted = Array.from(bySupplier.entries()).sort(
+                      (a, b) => toEur(a[1].price, a[1].currency, eurRates) - toEur(b[1].price, b[1].currency, eurRates)
+                    );
                     let rank = 0;
                     let lastPrice: number | null = null;
                     sorted.forEach(([s, o], i) => {
-                      if (lastPrice === null || o.price !== lastPrice) rank = i + 1;
-                      lastPrice = o.price;
+                      const priceEur = toEur(o.price, o.currency, eurRates);
+                      if (lastPrice === null || priceEur !== lastPrice) rank = i + 1;
+                      lastPrice = priceEur;
                       rankBySupplier.set(s, { rank, size: sorted.length });
                     });
                   }
@@ -1303,9 +1327,22 @@ export default function MatrixPage() {
                         // column itself shows. Falls back to the individual
                         // offer's rrp only if the row has none at all.
                         const referenceRrp = p.rrp ?? cell?.rrp ?? null;
+                        // Convert both sides to EUR before diffing - the RRP
+                        // and the supplier's price can be quoted in different
+                        // currencies (e.g. RRP in USD, offer in EUR), and a
+                        // face-value subtraction across currencies produces a
+                        // meaningless "% vs RRP" (see lib/currency.ts).
+                        const referenceRrpCurrency = p.rrp != null ? p.rrpCurrency : cell?.currency;
+                        const referenceRrpEur =
+                          referenceRrp != null ? toEur(referenceRrp, referenceRrpCurrency, eurRates) : null;
+                        const cellPriceEur = cell ? toEur(cell.price, cell.currency, eurRates) : null;
                         const discount =
-                          cell && referenceRrp && referenceRrp > 0
-                            ? ((referenceRrp - cell.price) / referenceRrp) * 100
+                          cellPriceEur !== null && referenceRrpEur && referenceRrpEur > 0
+                            ? ((referenceRrpEur - cellPriceEur) / referenceRrpEur) * 100
+                            : null;
+                        const cellPriceEurHint =
+                          cell && cell.currency && cell.currency.trim().toUpperCase() !== "EUR"
+                            ? toEur(cell.price, cell.currency, eurRates)
                             : null;
                         return (
                           <td
@@ -1329,6 +1366,11 @@ export default function MatrixPage() {
                                 {cell.price.toFixed(2)} {cell.currency}
                                 {addedToday && (
                                   <span className="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-blue-500 align-middle" />
+                                )}
+                                {cellPriceEurHint !== null && (
+                                  <div className="text-[10px] font-normal normal-case text-gray-400">
+                                    ≈ {cellPriceEurHint.toFixed(2)} EUR
+                                  </div>
                                 )}
                                 {discount !== null && (
                                   <div
