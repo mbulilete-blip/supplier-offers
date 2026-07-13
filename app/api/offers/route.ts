@@ -8,6 +8,14 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const search = searchParams.get("search") ?? undefined;
   const brand = searchParams.get("brand") ?? undefined;
+  // Comma-separated list of exact raw brand values - used by the Matrix page
+  // to fetch every offer belonging to a fuzzy-matched group of brand name
+  // variants (e.g. "ANNEMARIE BORLIND", "Annemarie Börlind", ...) in one
+  // request. Takes precedence over `brand` when present.
+  const brandsParam = searchParams.get("brands") ?? undefined;
+  const brandIn = brandsParam
+    ? brandsParam.split(",").map((b) => b.trim()).filter(Boolean)
+    : undefined;
   const supplier = searchParams.get("supplier") ?? undefined;
   // Comma-separated list of exact raw supplier values - used by the History
   // page to fetch every offer belonging to a fuzzy-matched group of supplier
@@ -25,6 +33,7 @@ export async function GET(req: NextRequest) {
   const { offers, total } = await listOffers({
     search,
     brand,
+    brandIn,
     supplier,
     supplierIn,
     limit: effectiveLimit,

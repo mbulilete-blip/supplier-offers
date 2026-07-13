@@ -1,6 +1,7 @@
 import { Pool } from "pg";
 import { Offer, OfferInput } from "./types";
 import { groupSuppliers, SupplierGroup } from "./supplierNormalize";
+import { groupBrands, BrandGroup } from "./brandNormalize";
 
 // Vercel Postgres (Neon) sets POSTGRES_URL automatically once you add the
 // Storage integration in the Vercel dashboard. DATABASE_URL is supported
@@ -106,6 +107,12 @@ function mapRow(row: any): Offer {
 export type ListOffersParams = {
   search?: string;
   brand?: string;
+  // Exact-match against any of these raw brand values at once - used by the
+  // Matrix page to pull every offer for a fuzzy-matched group of brand name
+  // variants (see lib/brandNormalize.ts, e.g. "ANNEMARIE BORLIND" vs.
+  // "Annemarie Börlind") in one query. Takes precedence over `brand` when
+  // both are set.
+  brandIn?: string[];
   supplier?: string;
   // Exact-match against any of these raw supplier values at once - used by
   // the History page to pull every offer for a fuzzy-matched group of
@@ -138,13 +145,17 @@ export async function listOffers(params: ListOffersParams = {}): Promise<ListOff
   const offset = Math.max(params.offset ?? 0, 0);
   const search = params.search?.trim();
   const brand = params.brand?.trim();
+  const brandIn = params.brandIn?.map((b) => b.trim()).filter(Boolean);
   const supplier = params.supplier?.trim();
   const supplierIn = params.supplierIn?.map((s) => s.trim()).filter(Boolean);
 
   const conditions: string[] = [];
   const values: unknown[] = [];
 
-  if (brand) {
+  if (brandIn && brandIn.length > 0) {
+    values.push(brandIn);
+    conditions.push(`brand = ANY($${values.length}::text[])`);
+  } else if (brand) {
     values.push(brand);
     conditions.push(`brand = $${values.length}`);
   }
@@ -255,6 +266,16 @@ export async function listSuppliers(): Promise<{ supplier: string; count: number
 export async function listSupplierGroups(): Promise<SupplierGroup[]> {
   const suppliers = await listSuppliers();
   return groupSuppliers(suppliers);
+}
+
+// Same distinct-brand list as listBrands(), but fuzzy-grouped so that e.g.
+// "ANNEMARIE BORLIND", "Annemarie Börlind", and "annemarie borlind" all
+// collapse into one entry with its raw case/diacritic variants attached.
+// Used by the Matrix page's brand picker so one real-world brand shows up
+// once instead of as several near-duplicate spelling variants.
+export async function listBrandGroups(): Promise<BrandGroup[]> {
+  const brands = await listBrands();
+  return groupBrands(brands);
 }
 
 // Bulk-renames every offer currently filed under one exact supplier string to

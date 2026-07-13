@@ -106,8 +106,19 @@ async function downloadOffersXlsx(filename: string, offers: Offer[]) {
   XLSX.writeFile(workbook, filename);
 }
 
+// A brand may be spelled several ways in the raw data (case, diacritics -
+// e.g. "ANNEMARIE BORLIND" vs. "Annemarie Börlind") - grouped by
+// lib/brandNormalize.ts so they show up once in the picker with their raw
+// variants attached, the same pattern used for supplier batch-label grouping
+// on the History page (see lib/supplierNormalize.ts).
+type BrandGroup = {
+  canonical: string;
+  count: number;
+  variants: { brand: string; count: number }[];
+};
+
 export default function MatrixPage() {
-  const [brands, setBrands] = useState<{ brand: string; count: number }[]>([]);
+  const [brands, setBrands] = useState<BrandGroup[]>([]);
   const [brand, setBrand] = useState("");
   // Free-text filter over the brand dropdown - this list can run into the
   // hundreds, so typing a few letters narrows it down instead of scrolling.
@@ -258,7 +269,8 @@ export default function MatrixPage() {
   const [deleteNotice, setDeleteNotice] = useState<string | null>(null);
 
   const deleteColumn = async (supplier: string) => {
-    const count = offers.filter((o) => o.supplier === supplier).length;
+    const supplierOffers = offers.filter((o) => o.supplier === supplier);
+    const count = supplierOffers.length;
     if (
       !confirm(
         `Delete all ${count} offer(s) from "${supplier}" for ${brand}? This can't be undone.`
@@ -269,14 +281,23 @@ export default function MatrixPage() {
     setDeletingSupplier(true);
     setDeleteNotice(null);
     try {
-      const res = await fetch("/api/suppliers/delete", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ supplier, brand }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error ?? "Failed to delete offers.");
-      setDeleteNotice(`Deleted ${data.deleted} offer(s) from "${supplier}" for ${brand}.`);
+      // The selected brand may be a fuzzy-matched group of raw spelling
+      // variants (see lib/brandNormalize.ts) - delete every variant actually
+      // present among this supplier's loaded offers so nothing is left
+      // behind under a differently cased/accented brand spelling.
+      const rawBrands = Array.from(new Set(supplierOffers.map((o) => o.brand)));
+      let deleted = 0;
+      for (const rawBrand of rawBrands) {
+        const res = await fetch("/api/suppliers/delete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ supplier, brand: rawBrand }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error ?? "Failed to delete offers.");
+        deleted += data.deleted ?? 0;
+      }
+      setDeleteNotice(`Deleted ${deleted} offer(s) from "${supplier}" for ${brand}.`);
       fetchOffers();
     } catch (e) {
       alert(e instanceof Error ? e.message : "Failed to delete offers.");
@@ -299,7 +320,7 @@ export default function MatrixPage() {
   // surfaces "MATIERE PREMIERE." or "Materia Premiere", and "mesoestetic"
   // matches both "MESOESTETIC" and "MESOESTETIC.".
   const filteredBrands = useMemo(
-    () => fuzzyFilterSort(brands, brandSearch, (b) => b.brand),
+    () => fuzzyFilterSort(brands, brandSearch, (b) => b.canonical),
     [brands, brandSearch]
   );
 
@@ -307,8 +328,8 @@ export default function MatrixPage() {
   // longer matches the search text - otherwise typing after picking a brand
   // would make the dropdown silently show no selection.
   const brandDropdownOptions = useMemo(() => {
-    if (!brand || filteredBrands.some((b) => b.brand === brand)) return filteredBrands;
-    const current = brands.find((b) => b.brand === brand);
+    if (!brand || filteredBrands.some((b) => b.canonical === brand)) return filteredBrands;
+    const current = brands.find((b) => b.canonical === brand);
     return current ? [current, ...filteredBrands] : filteredBrands;
   }, [brand, brands, filteredBrands]);
 
@@ -316,7 +337,7 @@ export default function MatrixPage() {
     // Enter with exactly one match jumps straight to it, so a known brand
     // name can be typed and confirmed without ever touching the dropdown.
     if (e.key === "Enter" && filteredBrands.length === 1) {
-      setBrand(filteredBrands[0].brand);
+      setBrand(filteredBrands[0].canonical);
       setBrandSearch("");
     } else if (e.key === "Escape") {
       setBrandSearch("");
@@ -324,10 +345,19 @@ export default function MatrixPage() {
   };
 
   const loadBrands = () => {
-    fetch("/api/brands")
+    fetch("/api/brands?grouped=true")
       .then((r) => r.json())
       .then((data) => setBrands(Array.isArray(data) ? data : []));
   };
+
+  // The fuzzy-matched group backing the currently selected brand - carries
+  // every raw spelling variant so fetch/rename/delete actions can operate on
+  // all of them at once instead of missing rows filed under a differently
+  // cased/accented spelling.
+  const selectedBrandGroup = useMemo(
+    () => brands.find((g) => g.canonical === brand) ?? null,
+    [brands, brand]
+  );
 
   useEffect(() => {
     loadBrands();
@@ -353,21 +383,32 @@ export default function MatrixPage() {
       setBrandRenameError("Name can't be empty.");
       return;
     }
-    if (to === brand) {
+    const rawBrands = selectedBrandGroup ? selectedBrandGroup.variants.map((v) => v.brand) : [brand];
+    if (to === brand && rawBrands.length <= 1) {
       cancelBrandRename();
       return;
     }
     setBrandRenaming(true);
     setBrandRenameError(null);
     try {
-      const res = await fetch("/api/brands/rename", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ from: brand, to }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error ?? "Failed to rename brand.");
-      setBrandRenameNotice(`Renamed ${data.updated} offer(s) from "${brand}" to "${to}".`);
+      // The selected brand may be a fuzzy-matched group of raw spelling
+      // variants (see lib/brandNormalize.ts) - rename every variant to the
+      // new name, not just the canonical label, so e.g. renaming "Annemarie
+      // Börlind" also fixes rows filed under "ANNEMARIE BORLIND" in the same
+      // group.
+      let updated = 0;
+      for (const rawBrand of rawBrands) {
+        if (rawBrand === to) continue;
+        const res = await fetch("/api/brands/rename", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ from: rawBrand, to }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error ?? "Failed to rename brand.");
+        updated += data.updated ?? 0;
+      }
+      setBrandRenameNotice(`Renamed ${updated} offer(s) from "${brand}" to "${to}".`);
       setRenamingBrand(false);
       setBrandRenameValue("");
       loadBrands();
@@ -380,13 +421,17 @@ export default function MatrixPage() {
   };
 
   const fetchOffers = () => {
-    if (!brand) {
+    if (!selectedBrandGroup) {
       setOffers([]);
       setTruncated(false);
       return;
     }
     setLoading(true);
-    const params = new URLSearchParams({ brand, limit: String(BRAND_FETCH_LIMIT), page: "1" });
+    // Fetch every raw spelling variant in the selected (fuzzy-matched) brand
+    // group in one request, not just the exact canonical string - see
+    // lib/brandNormalize.ts.
+    const rawBrands = selectedBrandGroup.variants.map((v) => v.brand).join(",");
+    const params = new URLSearchParams({ brands: rawBrands, limit: String(BRAND_FETCH_LIMIT), page: "1" });
     fetch(`/api/offers?${params.toString()}`)
       .then((r) => r.json())
       .then((data) => {
@@ -688,9 +733,10 @@ export default function MatrixPage() {
       <section>
         <h1 className="text-2xl font-semibold">Price Matrix</h1>
         <p className="mt-1 text-sm text-gray-500">
-          Pick a brand to see every product against every supplier side by side. In each row with
-          2+ quotes, the cheapest price is green, the priciest is red, and the runner-up is amber
-          when there are 3 or more quotes to compare.
+          Pick a brand to see every product against every supplier side by side. Brands spelled
+          differently by case or accents (e.g. "ANNEMARIE BORLIND" vs. "Annemarie Börlind") are
+          grouped into one entry. In each row with 2+ quotes, the cheapest price is green, the
+          priciest is red, and the runner-up is amber when there are 3 or more quotes to compare.
         </p>
       </section>
 
@@ -751,8 +797,8 @@ export default function MatrixPage() {
           >
             <option value="">Select a brand…</option>
             {brandDropdownOptions.map((b) => (
-              <option key={b.brand} value={b.brand}>
-                {b.brand} ({b.count.toLocaleString()})
+              <option key={b.canonical} value={b.canonical}>
+                {b.canonical} ({b.count.toLocaleString()})
               </option>
             ))}
           </select>
@@ -783,6 +829,14 @@ export default function MatrixPage() {
       )}
 
       {brandRenameNotice && <p className="text-xs text-green-700">{brandRenameNotice}</p>}
+
+      {!renamingBrand && selectedBrandGroup && selectedBrandGroup.variants.length > 1 && (
+        <p className="text-xs text-gray-400">
+          Grouped from {selectedBrandGroup.variants.length} spelling variants on file:{" "}
+          {selectedBrandGroup.variants.map((v) => v.brand).join(", ")}. If any of those aren&apos;t
+          really the same brand, use Rename brand to split one out first.
+        </p>
+      )}
 
       {brand && availabilityOptions.length > 0 && (
         <div className="flex flex-wrap items-center gap-2">
