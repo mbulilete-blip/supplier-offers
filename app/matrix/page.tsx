@@ -688,8 +688,9 @@ export default function MatrixPage() {
       <section>
         <h1 className="text-2xl font-semibold">Price Matrix</h1>
         <p className="mt-1 text-sm text-gray-500">
-          Pick a brand to see every product against every supplier side by side. The lowest
-          price in each row is highlighted.
+          Pick a brand to see every product against every supplier side by side. In each row with
+          2+ quotes, the cheapest price is green, the priciest is red, and the runner-up is amber
+          when there are 3 or more quotes to compare.
         </p>
       </section>
 
@@ -1101,15 +1102,22 @@ export default function MatrixPage() {
                 )}
                 {filteredProducts.map((p, rowIdx) => {
                   const bySupplier = cellPrice.get(p.key);
-                  let bestSupplier: string | null = null;
-                  let bestPrice = Infinity;
-                  if (bySupplier) {
-                    for (const [s, v] of bySupplier.entries()) {
-                      if (v.price < bestPrice) {
-                        bestPrice = v.price;
-                        bestSupplier = s;
-                      }
-                    }
+                  // Rank every supplier that quoted this product, cheapest to
+                  // priciest, so each price cell can be colored by where it
+                  // lands in this row - not just whether it's THE cheapest.
+                  // Ties (identical prices) share a rank. Only built for rows
+                  // with 2+ quotes - a single-supplier row has nothing to
+                  // rank against, so its cell stays uncolored.
+                  const rankBySupplier = new Map<string, { rank: number; size: number }>();
+                  if (bySupplier && bySupplier.size > 1) {
+                    const sorted = Array.from(bySupplier.entries()).sort((a, b) => a[1].price - b[1].price);
+                    let rank = 0;
+                    let lastPrice: number | null = null;
+                    sorted.forEach(([s, o], i) => {
+                      if (lastPrice === null || o.price !== lastPrice) rank = i + 1;
+                      lastPrice = o.price;
+                      rankBySupplier.set(s, { rank, size: sorted.length });
+                    });
                   }
                   const rowBg = rowIdx % 2 === 1 ? "bg-gray-50/60" : "bg-white";
                   const isSelected = selectedKeys.has(p.key);
@@ -1216,7 +1224,14 @@ export default function MatrixPage() {
                       </td>
                       {suppliers.map((s) => {
                         const cell = bySupplier?.get(s);
-                        const isBest = s === bestSupplier && bySupplier && bySupplier.size > 1;
+                        const rank = rankBySupplier.get(s);
+                        const isBest = rank?.rank === 1;
+                        // Second-cheapest only gets its own color when there's
+                        // a distinct middle ground to call out (3+ quotes) -
+                        // with exactly two quotes, the "other" one is already
+                        // the priciest and gets that treatment below instead.
+                        const isSecond = !!rank && rank.size > 2 && rank.rank === 2;
+                        const isWorst = !!rank && rank.rank === rank.size;
                         const addedToday = cell ? isToday(cell.createdAt) : false;
                         // Discount vs RRP: always measured against the row's
                         // one canonical RRP (p.rrp), not each offer's own rrp
@@ -1236,7 +1251,15 @@ export default function MatrixPage() {
                             onClick={() => cell && setEditingOffer(cell)}
                             className={`px-3 py-2 text-right align-top tabular-nums whitespace-nowrap ${
                               cell ? "cursor-pointer hover:underline" : ""
-                            } ${isBest ? "bg-green-50 font-semibold text-green-700" : "text-gray-700"}`}
+                            } ${
+                              isBest
+                                ? "bg-green-50 font-semibold text-green-700"
+                                : isWorst
+                                ? "bg-red-50 font-semibold text-red-700"
+                                : isSecond
+                                ? "bg-amber-50 font-semibold text-amber-700"
+                                : "text-gray-700"
+                            }`}
                           >
                             {cell ? (
                               <>
@@ -1283,7 +1306,10 @@ export default function MatrixPage() {
           Drag the right edge of the Product column header to resize it. Click any RRP to edit or
           clear it - this updates that value across every supplier for the product, not just one
           offer. Check rows and use &quot;Delete selected&quot; to bulk-delete every offer for
-          those products (across all suppliers) - handy for clearing out bad imported data. Each
+          those products (across all suppliers) - handy for clearing out bad imported data. In any
+          row quoted by 2+ suppliers, the cheapest price is green, the priciest is red, and the
+          runner-up is amber once there are 3+ quotes to rank - single-supplier rows have nothing
+          to compare against, so they're left plain. Each
           price shows its discount vs that row&apos;s RRP underneath - red means the price is
           above RRP. &quot;Updated&quot; under each supplier is when their most recent price for
           this brand was added. Click any price to edit that offer, or hover the product name to
