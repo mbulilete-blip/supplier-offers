@@ -132,6 +132,7 @@ export function offersFromCsv(text: string): CsvImportResult {
       region: str(get("region")) ?? null,
       incoterm: str(get("incoterm")) ?? null,
       marketOrigin: str(get("marketorigin") ?? get("market origin") ?? get("market_origin")) ?? null,
+      availability: str(get("availability")) ?? null,
       notes: str(get("notes")) ?? null,
     });
   }

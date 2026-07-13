@@ -23,6 +23,7 @@ export type ColumnRole =
   | "region"
   | "incoterm"
   | "marketOrigin"
+  | "availability"
   | "extra";
 
 export const ROLE_LABELS: Record<ColumnRole, string> = {
@@ -40,6 +41,7 @@ export const ROLE_LABELS: Record<ColumnRole, string> = {
   region: "Region",
   incoterm: "Incoterm / shipping terms (e.g. EXW)",
   marketOrigin: "EU / Non-EU origin",
+  availability: "Availability (In Stock / Preorder)",
   extra: "Extra (kept as note)",
 };
 
@@ -71,6 +73,9 @@ const KEYWORDS: Partial<Record<ColumnRole, string[]>> = {
   // location as the value, like the Huda Beauty file's "EXW" -> "DUBAI").
   incoterm: ["incoterm", "exw", "fob", "ddp", "cif", "fca", "cpt", "terms of sale", "shipping terms"],
   marketOrigin: ["eu goods", "non eu", "non-eu", "eu stock", "market origin", "eu origin", "eu/non eu"],
+  // Deliberately no bare "stock" keyword - too many unrelated headers
+  // ("Stock Code", "Stock Qty") contain that word and would be misclaimed.
+  availability: ["availability", "stock status", "preorder", "pre-order", "in stock", "stock availability"],
   price: ["price", "cost", "rate", "precio", "importe", "wholesale", "offer"],
   product: ["product", "description", "name", "article", "item", "title"],
 };
@@ -91,6 +96,7 @@ const ROLE_PRIORITY: ColumnRole[] = [
   "currency",
   "incoterm",
   "marketOrigin",
+  "availability",
   "price",
   "product",
 ];
@@ -318,7 +324,27 @@ export type BuildOptions = {
   // free text (e.g. "6 weeks", "10-15 days"), not a strict day count.
   defaultLeadTimeDays?: string;
   defaultMoq?: number;
+  // Same fallback-default pattern as lead time/MOQ: availability genuinely
+  // varies product-to-product within one list, so a per-row column value
+  // always wins and this only fills in rows that have none.
+  defaultAvailability?: string;
 };
+
+// Canonicalizes common supplier phrasings into one of four buckets so
+// filtering by "In Stock" or "Preorder" actually groups things consistently,
+// while passing through anything unrecognized unchanged rather than
+// discarding information the supplier gave us.
+export function normalizeAvailability(raw: string | undefined): string | null {
+  if (!raw) return null;
+  const t = raw.trim();
+  if (t === "") return null;
+  const low = t.toLowerCase();
+  if (/pre.?order/.test(low)) return "Preorder";
+  if (/(in stock|available now|ready stock|ex stock|immediate)/.test(low)) return "In Stock";
+  if (/back ?order/.test(low)) return "Backorder";
+  if (/(out of stock|sold out|no stock)/.test(low)) return "Out of Stock";
+  return t;
+}
 
 export type BuildResult = {
   offers: OfferInput[];
@@ -351,6 +377,7 @@ export function buildOffersFromMapping(
   const regionCol = firstByRole("region");
   const incotermCol = firstByRole("incoterm");
   const marketOriginCol = firstByRole("marketOrigin");
+  const availabilityCol = firstByRole("availability");
   const extraCols = byRole("extra");
 
   const isWideFormat = priceCols.length > 1 && !supplierCol;
@@ -387,6 +414,10 @@ export function buildOffersFromMapping(
       str(options.marketOriginOverride) ??
       str(marketOriginCol ? r[marketOriginCol.index] : undefined) ??
       null;
+    const availability =
+      normalizeAvailability(str(availabilityCol ? r[availabilityCol.index] : undefined)) ??
+      normalizeAvailability(options.defaultAvailability) ??
+      null;
     const notes = buildNotes(r) ?? null;
 
     if (!product) {
@@ -422,6 +453,7 @@ export function buildOffersFromMapping(
           region,
           incoterm,
           marketOrigin,
+          availability,
           notes,
         });
       }
@@ -463,6 +495,7 @@ export function buildOffersFromMapping(
         region,
         incoterm,
         marketOrigin,
+        availability,
         notes,
       });
     }
@@ -498,6 +531,7 @@ export function offersToCsv(offers: OfferInput[]): string {
         o.region ?? "",
         o.incoterm ?? "",
         o.marketOrigin ?? "",
+        o.availability ?? "",
         o.notes ?? "",
       ]
         .map(escape)

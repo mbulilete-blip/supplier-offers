@@ -102,6 +102,7 @@ const ROLE_OPTIONS: ColumnRole[] = [
   "region",
   "incoterm",
   "marketOrigin",
+  "availability",
   "extra",
 ];
 
@@ -137,6 +138,12 @@ export default function ImportCheckPage() {
   // when a row doesn't have its own value.
   const [defaultLeadTimeDays, setDefaultLeadTimeDays] = useState("");
   const [defaultMoq, setDefaultMoq] = useState("");
+  // Same fallback-default treatment: availability genuinely varies row to
+  // row within one list, so this only fills in rows with no value of their
+  // own ("Unknown" means "don't set a default, leave it to the column/blank").
+  const [defaultAvailability, setDefaultAvailability] = useState<"Unknown" | "In Stock" | "Preorder">(
+    "Unknown"
+  );
 
   const [comparing, setComparing] = useState(false);
   const [result, setResult] = useState<CompareResult | null>(null);
@@ -231,6 +238,7 @@ export default function ImportCheckPage() {
       marketOriginOverride: marketOrigin === "Unknown" ? undefined : marketOrigin,
       defaultLeadTimeDays: leadTimeTrimmed === "" ? undefined : leadTimeTrimmed,
       defaultMoq: moqNum !== undefined && Number.isFinite(moqNum) ? moqNum : undefined,
+      defaultAvailability: defaultAvailability === "Unknown" ? undefined : defaultAvailability,
     });
   }, [
     rows,
@@ -244,6 +252,7 @@ export default function ImportCheckPage() {
     marketOrigin,
     defaultLeadTimeDays,
     defaultMoq,
+    defaultAvailability,
   ]);
 
   const handleCompare = async () => {
@@ -496,10 +505,24 @@ export default function ImportCheckPage() {
                 placeholder="e.g. 10"
               />
             </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-700">
+                Default availability <span className="font-normal text-gray-400">— fallback only</span>
+              </label>
+              <select
+                className="input mt-1 w-full text-sm"
+                value={defaultAvailability}
+                onChange={(e) => setDefaultAvailability(e.target.value as typeof defaultAvailability)}
+              >
+                <option value="Unknown">Unknown (leave blank)</option>
+                <option value="In Stock">In Stock</option>
+                <option value="Preorder">Preorder</option>
+              </select>
+            </div>
           </div>
           <p className="text-xs text-gray-400">
-            Lead time and MOQ defaults only fill in rows that don&apos;t already have their own value —
-            unlike supplier, Incoterm, and EU origin above, which apply to every row.
+            Lead time, MOQ, and availability defaults only fill in rows that don&apos;t already have their
+            own value — unlike supplier, Incoterm, and EU origin above, which apply to every row.
           </p>
 
           {built && (

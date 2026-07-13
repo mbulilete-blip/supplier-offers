@@ -33,6 +33,7 @@ const FIELDS: { key: keyof OfferInput; label: string; type?: string; inputMode?:
   { key: "region", label: "Region" },
   { key: "incoterm", label: "Incoterm" },
   { key: "marketOrigin", label: "Market origin" },
+  { key: "availability", label: "Availability" },
   { key: "notes", label: "Notes" },
 ];
 
@@ -88,6 +89,7 @@ export default function EditOfferModal({ offer, onClose, onSaved }: Props) {
       region: form.region.trim() || null,
       incoterm: form.incoterm.trim() || null,
       marketOrigin: form.marketOrigin.trim() || null,
+      availability: form.availability.trim() || null,
       notes: form.notes.trim() || null,
     };
 

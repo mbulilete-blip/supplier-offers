@@ -64,7 +64,11 @@ export function ensureSchema(): Promise<void> {
         -- widen the existing column to free text (a no-op if this has
         -- already run once, since ALTER ... TYPE TEXT on a column that's
         -- already TEXT succeeds without changing anything).
-        ALTER TABLE offers ALTER COLUMN lead_time_days TYPE TEXT USING lead_time_days::text;`
+        ALTER TABLE offers ALTER COLUMN lead_time_days TYPE TEXT USING lead_time_days::text;
+        -- Stock status (e.g. "In Stock", "Preorder", "Backorder", "Out of
+        -- Stock") captured at import time so offers can be filtered by
+        -- availability instead of just price.
+        ALTER TABLE offers ADD COLUMN IF NOT EXISTS availability TEXT;`
       )
       .then(() => undefined);
   }
@@ -88,6 +92,7 @@ function mapRow(row: any): Offer {
     region: row.region,
     incoterm: row.incoterm,
     marketOrigin: row.market_origin,
+    availability: row.availability,
     notes: row.notes,
     createdAt: new Date(row.created_at).toISOString(),
   };
@@ -497,8 +502,8 @@ export async function createOffer(input: OfferInput): Promise<Offer> {
   await ensureSchema();
   const { rows } = await getPool().query(
     `INSERT INTO offers
-       (supplier, brand, product, sku, price, currency, rrp, moq, lead_time_days, payment_terms, region, incoterm, market_origin, notes)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+       (supplier, brand, product, sku, price, currency, rrp, moq, lead_time_days, payment_terms, region, incoterm, market_origin, availability, notes)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
      RETURNING *;`,
     [
       input.supplier,
@@ -514,6 +519,7 @@ export async function createOffer(input: OfferInput): Promise<Offer> {
       input.region ?? null,
       input.incoterm ?? null,
       input.marketOrigin ?? null,
+      input.availability ?? null,
       input.notes ?? null,
     ]
   );
@@ -525,7 +531,7 @@ export async function createOffer(input: OfferInput): Promise<Offer> {
 // (tens of thousands of rows) finish inside a serverless function's time
 // limit instead of timing out.
 const IMPORT_BATCH_SIZE = 1000;
-const COLS_PER_ROW = 14;
+const COLS_PER_ROW = 15;
 
 export async function createOffers(inputs: OfferInput[]): Promise<number> {
   await ensureSchema();
@@ -555,13 +561,14 @@ export async function createOffers(inputs: OfferInput[]): Promise<number> {
         input.region ?? null,
         input.incoterm ?? null,
         input.marketOrigin ?? null,
+        input.availability ?? null,
         input.notes ?? null
       );
     });
 
     await pool.query(
       `INSERT INTO offers
-         (supplier, brand, product, sku, price, currency, rrp, moq, lead_time_days, payment_terms, region, incoterm, market_origin, notes)
+         (supplier, brand, product, sku, price, currency, rrp, moq, lead_time_days, payment_terms, region, incoterm, market_origin, availability, notes)
        VALUES ${placeholders.join(",")};`,
       values
     );
@@ -592,6 +599,7 @@ export async function updateOffer(id: number, input: Partial<OfferInput>): Promi
     region: input.region !== undefined ? input.region : current.region,
     incoterm: input.incoterm !== undefined ? input.incoterm : current.incoterm,
     marketOrigin: input.marketOrigin !== undefined ? input.marketOrigin : current.marketOrigin,
+    availability: input.availability !== undefined ? input.availability : current.availability,
     notes: input.notes !== undefined ? input.notes : current.notes,
   };
 
@@ -599,8 +607,8 @@ export async function updateOffer(id: number, input: Partial<OfferInput>): Promi
     `UPDATE offers SET
        supplier = $1, brand = $2, product = $3, sku = $4, price = $5, currency = $6,
        rrp = $7, moq = $8, lead_time_days = $9, payment_terms = $10, region = $11,
-       incoterm = $12, market_origin = $13, notes = $14, updated_at = now()
-     WHERE id = $15
+       incoterm = $12, market_origin = $13, availability = $14, notes = $15, updated_at = now()
+     WHERE id = $16
      RETURNING *;`,
     [
       merged.supplier,
@@ -616,6 +624,7 @@ export async function updateOffer(id: number, input: Partial<OfferInput>): Promi
       merged.region ?? null,
       merged.incoterm ?? null,
       merged.marketOrigin ?? null,
+      merged.availability ?? null,
       merged.notes ?? null,
       id,
     ]

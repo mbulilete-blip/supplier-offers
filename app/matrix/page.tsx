@@ -76,6 +76,7 @@ async function downloadOffersXlsx(filename: string, offers: Offer[]) {
     Region: o.region ?? "",
     Incoterm: o.incoterm ?? "",
     "Market origin": o.marketOrigin ?? "",
+    Availability: o.availability ?? "",
     Notes: o.notes ?? "",
     Added: new Date(o.createdAt).toLocaleDateString(),
   }));
@@ -95,6 +96,7 @@ async function downloadOffersXlsx(filename: string, offers: Offer[]) {
     { wch: 12 }, // Region
     { wch: 14 }, // Incoterm
     { wch: 14 }, // Market origin
+    { wch: 14 }, // Availability
     { wch: 30 }, // Notes
     { wch: 12 }, // Added
   ];
@@ -121,6 +123,15 @@ export default function MatrixPage() {
   // with AND - a row must have a price under every active supplier to stay
   // visible, same as stacking column filters in Excel.
   const [priceFilterSuppliers, setPriceFilterSuppliers] = useState<Set<string>>(new Set());
+
+  // Toolbar-level stock-status filter: narrows the grid to only products that
+  // have at least one supplier offer matching one of the selected statuses
+  // (e.g. "In Stock" or "Preorder"). Multiple selected statuses combine with
+  // OR - checking both shows every product available either in stock or on
+  // preorder - since a product having any of the selected statuses is what
+  // "show me stock and preorder offers" means, unlike the per-supplier price
+  // filter above which is a per-column AND.
+  const [availabilityFilter, setAvailabilityFilter] = useState<Set<string>>(new Set());
 
   // Drag-to-resize for the sticky Product column - default (224px) matches
   // the old fixed w-56 class exactly, so nothing shifts until the user drags.
@@ -398,6 +409,7 @@ export default function MatrixPage() {
     setSelectedKeys(new Set());
     setEditingRrpKey(null);
     setPriceFilterSuppliers(new Set());
+    setAvailabilityFilter(new Set());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [brand]);
 
@@ -506,20 +518,45 @@ export default function MatrixPage() {
     };
   }, [offers]);
 
-  // Rows to actually render once the per-column price filters are applied -
-  // a product stays visible only if it has a price from every supplier
-  // currently filtered on (AND across columns, same as Excel autofilter).
+  // Distinct availability values seen across this brand's offers (e.g.
+  // "In Stock", "Preorder"), used to build the filter toggle buttons - only
+  // shows options that actually occur, instead of a fixed list that might not
+  // match what suppliers for this brand quoted.
+  const availabilityOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const o of offers) {
+      if (o.availability) set.add(o.availability);
+    }
+    return Array.from(set).sort();
+  }, [offers]);
+
+  // Rows to actually render once the per-column price filter and the
+  // availability filter are applied. Price-filter suppliers combine with AND
+  // (same as Excel autofilter, see above); availability combines with OR - a
+  // product stays visible if ANY of its supplier offers matches one of the
+  // selected statuses, since selecting both "In Stock" and "Preorder" should
+  // widen the view, not narrow it further.
   const filteredProducts = useMemo(() => {
-    if (priceFilterSuppliers.size === 0) return products;
+    if (priceFilterSuppliers.size === 0 && availabilityFilter.size === 0) return products;
     return products.filter((p) => {
       const bySupplier = cellPrice.get(p.key);
       if (!bySupplier) return false;
       for (const s of priceFilterSuppliers) {
         if (!bySupplier.has(s)) return false;
       }
+      if (availabilityFilter.size > 0) {
+        let matches = false;
+        for (const o of bySupplier.values()) {
+          if (o.availability && availabilityFilter.has(o.availability)) {
+            matches = true;
+            break;
+          }
+        }
+        if (!matches) return false;
+      }
       return true;
     });
-  }, [products, cellPrice, priceFilterSuppliers]);
+  }, [products, cellPrice, priceFilterSuppliers, availabilityFilter]);
 
   // Row selection (keyed the same way as the Product rows above - SKU if
   // present, else lowercased/trimmed product name) for bulk delete. Cleared
@@ -746,12 +783,66 @@ export default function MatrixPage() {
 
       {brandRenameNotice && <p className="text-xs text-green-700">{brandRenameNotice}</p>}
 
-      {brand && priceFilterSuppliers.size > 0 && (
+      {brand && availabilityOptions.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs font-medium text-gray-500">Availability:</span>
+          {availabilityOptions.map((a) => {
+            const active = availabilityFilter.has(a);
+            return (
+              <button
+                key={a}
+                onClick={() =>
+                  setAvailabilityFilter((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(a)) next.delete(a);
+                    else next.add(a);
+                    return next;
+                  })
+                }
+                className={`rounded-full border px-3 py-1 text-xs ${
+                  active
+                    ? "border-gray-900 bg-gray-900 text-white"
+                    : "border-gray-300 text-gray-600 hover:border-gray-400"
+                }`}
+              >
+                {a}
+              </button>
+            );
+          })}
+          {availabilityFilter.size > 0 && (
+            <button
+              onClick={() => setAvailabilityFilter(new Set())}
+              className="text-xs text-gray-400 underline hover:text-gray-700"
+            >
+              clear
+            </button>
+          )}
+        </div>
+      )}
+
+      {brand && (priceFilterSuppliers.size > 0 || availabilityFilter.size > 0) && (
         <p className="text-xs text-gray-500">
-          Showing {filteredProducts.length} of {products.length} products - priced by{" "}
-          <span className="font-medium text-gray-700">{Array.from(priceFilterSuppliers).join(", ")}</span> -{" "}
+          Showing {filteredProducts.length} of {products.length} products
+          {priceFilterSuppliers.size > 0 && (
+            <>
+              {" "}
+              - priced by{" "}
+              <span className="font-medium text-gray-700">{Array.from(priceFilterSuppliers).join(", ")}</span>
+            </>
+          )}
+          {availabilityFilter.size > 0 && (
+            <>
+              {" "}
+              - status{" "}
+              <span className="font-medium text-gray-700">{Array.from(availabilityFilter).join(", ")}</span>
+            </>
+          )}{" "}
+          -{" "}
           <button
-            onClick={() => setPriceFilterSuppliers(new Set())}
+            onClick={() => {
+              setPriceFilterSuppliers(new Set());
+              setAvailabilityFilter(new Set());
+            }}
             className="underline hover:text-gray-700"
           >
             clear filter
@@ -995,9 +1086,12 @@ export default function MatrixPage() {
                 {filteredProducts.length === 0 && (
                   <tr>
                     <td colSpan={3 + suppliers.length} className="px-3 py-6 text-center text-xs text-gray-400">
-                      No products priced by every filtered supplier.{" "}
+                      No products match the current filter(s).{" "}
                       <button
-                        onClick={() => setPriceFilterSuppliers(new Set())}
+                        onClick={() => {
+                          setPriceFilterSuppliers(new Set());
+                          setAvailabilityFilter(new Set());
+                        }}
                         className="underline hover:text-gray-600"
                       >
                         Clear filter
@@ -1164,6 +1258,11 @@ export default function MatrixPage() {
                                     {Math.abs(discount).toFixed(0)}% vs RRP
                                   </div>
                                 )}
+                                {cell.availability && (
+                                  <div className="text-[10px] font-normal normal-case text-gray-400">
+                                    {cell.availability}
+                                  </div>
+                                )}
                               </>
                             ) : (
                               "—"
@@ -1190,7 +1289,9 @@ export default function MatrixPage() {
           this brand was added. Click any price to edit that offer, or hover the product name to
           see it in full. Next to a supplier name, ✎ renames it everywhere (across every brand,
           not just this one), and 🗑 deletes all of that supplier&apos;s offers for this brand
-          only. Hover a price for its exact date.{" "}
+          only. The Availability buttons above the table filter to products with at least one
+          offer in that status (e.g. In Stock or Preorder); each price shows its own status
+          underneath when known. Hover a price for its exact date.{" "}
           <span className="inline-block h-1.5 w-1.5 rounded-full bg-blue-500 align-middle" /> and
           blue text mark today.
         </p>
