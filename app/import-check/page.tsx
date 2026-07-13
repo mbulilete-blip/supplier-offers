@@ -63,13 +63,75 @@ function formatDiffPercent(pct: number | null): string {
   return `${sign}${pct.toFixed(1)}%`;
 }
 
+// The Verdict/Diff % above only ever compare one new row against the single
+// existing market-best price - so if this upload quotes the same product
+// from two or more suppliers, more than one of them can legitimately show
+// "cheaper" (green) even though only one of those new quotes is actually the
+// best deal on offer right now. This ranks new rows against each other, per
+// product, within this upload only - matched the same way the server
+// matches to the market (by SKU when present, else brand+product text).
+type RankedCompareRow = CompareRow & { batchRank: number; batchGroupSize: number };
+
+function withBatchRanks(rows: CompareRow[]): RankedCompareRow[] {
+  const groupKey = (r: CompareRow) => {
+    const sku = r.sku?.trim().toLowerCase();
+    return sku ? `sku:${sku}` : `bp:${r.brand.trim().toLowerCase()}|${r.product.trim().toLowerCase()}`;
+  };
+
+  const groups = new Map<string, CompareRow[]>();
+  for (const r of rows) {
+    const key = groupKey(r);
+    const list = groups.get(key);
+    if (list) list.push(r);
+    else groups.set(key, [r]);
+  }
+
+  // Ties share a rank (two suppliers at an identical price are joint-
+  // cheapest), same convention as the "matches" verdict above.
+  const rankByRow = new Map<CompareRow, { rank: number; size: number }>();
+  for (const group of groups.values()) {
+    const sorted = [...group].sort((a, b) => a.price - b.price);
+    let rank = 0;
+    let lastPrice: number | null = null;
+    sorted.forEach((r, i) => {
+      if (lastPrice === null || r.price !== lastPrice) rank = i + 1;
+      lastPrice = r.price;
+      rankByRow.set(r, { rank, size: group.length });
+    });
+  }
+
+  return rows.map((r) => {
+    const info = rankByRow.get(r)!;
+    return { ...r, batchRank: info.rank, batchGroupSize: info.size };
+  });
+}
+
+// Green dot = cheapest quote for that product in this batch, red = priciest,
+// amber = runner-up when there are 3+ quotes to rank. Only shown once there's
+// more than one new quote for the same product - nothing to rank otherwise.
+function batchRankDotClass(rank: number, size: number): string | null {
+  if (size <= 1) return null;
+  if (rank === 1) return "bg-green-500";
+  if (rank === size) return "bg-red-500";
+  if (rank === 2) return "bg-amber-500";
+  return "bg-gray-300";
+}
+
+function batchRankLabel(rank: number, size: number): string {
+  if (size <= 1) return "Only quote for this product in this file";
+  if (rank === 1) return `Cheapest of ${size} quotes for this product in this file`;
+  if (rank === size) return `Priciest of ${size} quotes for this product in this file`;
+  if (rank === 2) return `Second-best of ${size} quotes for this product in this file`;
+  return `Quote ${rank} of ${size} for this product in this file`;
+}
+
 // Exports whichever verdict tab is currently active (e.g. just the "cheaper
 // than market" rows), not the full unfiltered result set - the filter tabs
 // already narrow to what the user is looking at, and the download should
 // match what's on screen. Real .xlsx (via the SheetJS "xlsx" package already
 // used elsewhere in this file to read uploads), not CSV, so it opens
 // straight into Excel with proper column widths and numeric price cells.
-async function downloadCompareXlsx(filename: string, rows: CompareRow[]) {
+async function downloadCompareXlsx(filename: string, rows: RankedCompareRow[]) {
   const XLSX = await import("xlsx");
 
   const data = rows.map((r) => ({
@@ -84,6 +146,7 @@ async function downloadCompareXlsx(filename: string, rows: CompareRow[]) {
     "Best supplier": r.marketBestSupplier ?? "",
     "Diff %": formatDiffPercent(diffPercent(r)),
     Verdict: VERDICT_LABEL[r.verdict],
+    "Batch position": batchRankLabel(r.batchRank, r.batchGroupSize),
   }));
 
   const sheet = XLSX.utils.json_to_sheet(data);
@@ -99,6 +162,7 @@ async function downloadCompareXlsx(filename: string, rows: CompareRow[]) {
     { wch: 20 }, // Best supplier
     { wch: 10 }, // Diff %
     { wch: 18 }, // Verdict
+    { wch: 32 }, // Batch position
   ];
 
   const workbook = XLSX.utils.book_new();
@@ -304,7 +368,8 @@ export default function ImportCheckPage() {
     setImported(data.imported ?? 0);
   };
 
-  const filteredRows = result ? result.rows.filter((r) => filter === "all" || r.verdict === filter) : [];
+  const rankedRows = useMemo(() => (result ? withBatchRanks(result.rows) : []), [result]);
+  const filteredRows = rankedRows.filter((r) => filter === "all" || r.verdict === filter);
 
   const handleExportFiltered = () => {
     if (filteredRows.length === 0) return;
@@ -673,7 +738,20 @@ export default function ImportCheckPage() {
                     </td>
                     <td className="px-4 py-3">{r.supplier}</td>
                     <td className="px-4 py-3">
-                      {r.price.toFixed(2)} {r.currency}
+                      <span
+                        className="inline-flex items-center gap-1.5"
+                        title={batchRankLabel(r.batchRank, r.batchGroupSize)}
+                      >
+                        {batchRankDotClass(r.batchRank, r.batchGroupSize) && (
+                          <span
+                            className={`h-2 w-2 shrink-0 rounded-full ${batchRankDotClass(
+                              r.batchRank,
+                              r.batchGroupSize
+                            )}`}
+                          />
+                        )}
+                        {r.price.toFixed(2)} {r.currency}
+                      </span>
                     </td>
                     <td className="px-4 py-3">
                       {r.marketBestPrice !== null
@@ -710,6 +788,18 @@ export default function ImportCheckPage() {
               </tbody>
             </table>
           </div>
+          <p className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-400">
+            <span className="inline-flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-full bg-green-500" /> Cheapest quote for that product in this file
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-full bg-amber-500" /> Second-best (3+ quotes)
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-full bg-red-500" /> Priciest quote for that product in this file
+            </span>
+            <span>— shown next to New price only when this file quotes the same product more than once.</span>
+          </p>
         </section>
       )}
     </div>
