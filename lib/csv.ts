@@ -61,11 +61,6 @@ const num = (v: string | undefined): number | undefined => {
   return Number.isFinite(n) ? n : undefined;
 };
 
-const int = (v: string | undefined): number | undefined => {
-  const n = num(v);
-  return n === undefined ? undefined : Math.round(n);
-};
-
 const str = (v: string | undefined): string | undefined => {
   if (v === undefined) return undefined;
   const t = v.trim();
@@ -126,7 +121,7 @@ export function offersFromCsv(text: string): CsvImportResult {
       price,
       currency: str(get("currency")) ?? "EUR",
       rrp: num(get("rrp")) ?? null,
-      moq: int(get("moq")) ?? null,
+      moq: str(get("moq")) ?? null,
       leadTimeDays: str(get("leadtimedays") ?? get("lead time days") ?? get("lead_time_days")) ?? null,
       paymentTerms: str(get("paymentterms") ?? get("payment terms") ?? get("payment_terms")) ?? null,
       region: str(get("region")) ?? null,

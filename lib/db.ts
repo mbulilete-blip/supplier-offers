@@ -43,7 +43,7 @@ export function ensureSchema(): Promise<void> {
           price NUMERIC NOT NULL,
           currency TEXT NOT NULL DEFAULT 'EUR',
           rrp NUMERIC,
-          moq INTEGER,
+          moq TEXT,
           lead_time_days TEXT,
           payment_terms TEXT,
           region TEXT,
@@ -68,7 +68,12 @@ export function ensureSchema(): Promise<void> {
         -- Stock status (e.g. "In Stock", "Preorder", "Backorder", "Out of
         -- Stock") captured at import time so offers can be filtered by
         -- availability instead of just price.
-        ALTER TABLE offers ADD COLUMN IF NOT EXISTS availability TEXT;`
+        ALTER TABLE offers ADD COLUMN IF NOT EXISTS availability TEXT;
+        -- MOQ started out as a whole-number quantity, but suppliers routinely
+        -- quote it as "500 (neg.)", "2-3 cartons", "no minimum", etc. - widen
+        -- to free text, same treatment as lead_time_days above (a no-op once
+        -- the column is already TEXT).
+        ALTER TABLE offers ALTER COLUMN moq TYPE TEXT USING moq::text;`
       )
       .then(() => undefined);
   }
@@ -86,7 +91,7 @@ function mapRow(row: any): Offer {
     price: Number(row.price),
     currency: row.currency,
     rrp: row.rrp === null ? null : Number(row.rrp),
-    moq: row.moq === null ? null : Number(row.moq),
+    moq: row.moq,
     leadTimeDays: row.lead_time_days,
     paymentTerms: row.payment_terms,
     region: row.region,

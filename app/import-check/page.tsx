@@ -229,7 +229,7 @@ export default function ImportCheckPage() {
   const built = useMemo(() => {
     if (rows.length === 0 || mapping.length === 0) return null;
     const leadTimeTrimmed = defaultLeadTimeDays.trim();
-    const moqNum = defaultMoq.trim() === "" ? undefined : Number(defaultMoq);
+    const moqTrimmed = defaultMoq.trim();
     return buildOffersFromMapping(rows, headerRowIndex, mapping, {
       supplierOverride: isWideFormat ? undefined : supplierName || undefined,
       defaultBrand: defaultBrand || undefined,
@@ -237,7 +237,7 @@ export default function ImportCheckPage() {
       incotermOverride: incotermName || undefined,
       marketOriginOverride: marketOrigin === "Unknown" ? undefined : marketOrigin,
       defaultLeadTimeDays: leadTimeTrimmed === "" ? undefined : leadTimeTrimmed,
-      defaultMoq: moqNum !== undefined && Number.isFinite(moqNum) ? moqNum : undefined,
+      defaultMoq: moqTrimmed === "" ? undefined : moqTrimmed,
       defaultAvailability: defaultAvailability === "Unknown" ? undefined : defaultAvailability,
     });
   }, [
@@ -499,10 +499,9 @@ export default function ImportCheckPage() {
               <input
                 className="input mt-1 w-full text-sm"
                 type="text"
-                inputMode="numeric"
                 value={defaultMoq}
                 onChange={(e) => setDefaultMoq(e.target.value)}
-                placeholder="e.g. 10"
+                placeholder="e.g. 10 or 500 (neg.)"
               />
             </div>
             <div>

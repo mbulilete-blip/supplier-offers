@@ -320,10 +320,11 @@ export type BuildOptions = {
   incotermOverride?: string;
   marketOriginOverride?: string;
   // Lead time and MOQ genuinely can vary per product even within one list,
-  // so these only fill in when a row has no value of its own. Lead time is
-  // free text (e.g. "6 weeks", "10-15 days"), not a strict day count.
+  // so these only fill in when a row has no value of its own. Both are free
+  // text (e.g. "6 weeks", "10-15 days" for lead time; "500 (neg.)", "no
+  // minimum" for MOQ), not a strict number.
   defaultLeadTimeDays?: string;
-  defaultMoq?: number;
+  defaultMoq?: string;
   // Same fallback-default pattern as lead time/MOQ: availability genuinely
   // varies product-to-product within one list, so a per-row column value
   // always wins and this only fills in rows that have none.
@@ -403,7 +404,7 @@ export function buildOffersFromMapping(
     const product = str(productCol ? r[productCol.index] : undefined);
     const sku = str(skuCol ? r[skuCol.index] : undefined) ?? null;
     const rrp = parseMoney(rrpCol ? r[rrpCol.index] : undefined) ?? null;
-    const moq = parseFirstInt(moqCol ? r[moqCol.index] : undefined) ?? options.defaultMoq ?? null;
+    const moq = str(moqCol ? r[moqCol.index] : undefined) ?? options.defaultMoq ?? null;
     const leadTimeDays =
       str(leadCol ? r[leadCol.index] : undefined) ?? options.defaultLeadTimeDays ?? null;
     const paymentTerms = str(paymentCol ? r[paymentCol.index] : undefined) ?? null;

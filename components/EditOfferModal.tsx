@@ -22,10 +22,10 @@ const FIELDS: { key: keyof OfferInput; label: string; type?: string; inputMode?:
   { key: "price", label: "Price", type: "number" },
   { key: "currency", label: "Currency" },
   { key: "rrp", label: "RRP", type: "number" },
-  // MOQ and lead time are text (not number) inputs on purpose - unlike price/
-  // RRP, these are often non-strict-numeric in practice (e.g. "500 (neg.)" or
-  // "2-3"), and a number input's spinner/strict validation got in the way.
-  { key: "moq", label: "MOQ", type: "text", inputMode: "numeric" },
+  // MOQ and lead time are free text on purpose - unlike price/RRP, these are
+  // often non-strict-numeric in practice (e.g. "500 (neg.)" or "2-3"), and a
+  // number input's spinner/strict validation got in the way.
+  { key: "moq", label: "MOQ" },
   // Free text on purpose - suppliers quote this as "6 weeks", "10-15 days",
   // "immediate", etc., not a strict day-count integer.
   { key: "leadTimeDays", label: "Lead time" },
@@ -63,16 +63,9 @@ export default function EditOfferModal({ offer, onClose, onSaved }: Props) {
       return;
     }
 
-    // MOQ and lead time are plain text inputs (see FIELDS above) so typing
-    // isn't blocked by a number spinner, but both are still stored as
-    // whole-number columns in the database - so a non-numeric entry has to
-    // be caught here rather than silently saved as null/NaN.
-    const moqTrimmed = form.moq.trim();
-    const moq = moqTrimmed === "" ? null : Number(moqTrimmed);
-    if (moq !== null && (!Number.isFinite(moq) || !Number.isInteger(moq) || moq < 0)) {
-      setError("MOQ must be a whole number, or left blank.");
-      return;
-    }
+    // MOQ and lead time are both free-text columns - suppliers routinely quote
+    // things like "500 (neg.)" or "2-3 cartons", so no numeric validation here.
+    const moq = form.moq.trim() || null;
     const leadTimeDays = form.leadTimeDays.trim() || null;
 
     const payload: Partial<OfferInput> = {

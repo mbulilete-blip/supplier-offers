@@ -6,7 +6,9 @@ export type OfferInput = {
   price: number;
   currency?: string;
   rrp?: number | null;
-  moq?: number | null;
+  // Free text, not a strict integer - suppliers routinely quote this as
+  // "500 (neg.)", "2-3 cartons", "no minimum", etc., not a single number.
+  moq?: string | null;
   // Free text, not a strict day count - suppliers routinely quote this as
   // "6 weeks", "10-15 days", "immediate", etc., not a single integer.
   leadTimeDays?: string | null;
@@ -36,7 +38,7 @@ export type Offer = {
   price: number;
   currency: string;
   rrp: number | null;
-  moq: number | null;
+  moq: string | null;
   leadTimeDays: string | null;
   paymentTerms: string | null;
   region: string | null;

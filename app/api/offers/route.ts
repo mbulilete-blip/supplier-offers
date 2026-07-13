@@ -47,7 +47,7 @@ export async function POST(req: NextRequest) {
     ...body,
     price: Number(body.price),
     rrp: body.rrp !== undefined && body.rrp !== null ? Number(body.rrp) : null,
-    moq: body.moq !== undefined && body.moq !== null ? Number(body.moq) : null,
+    moq: body.moq !== undefined && body.moq !== null ? String(body.moq).trim() || null : null,
     leadTimeDays:
       body.leadTimeDays !== undefined && body.leadTimeDays !== null
         ? String(body.leadTimeDays).trim() || null
