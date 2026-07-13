@@ -46,6 +46,23 @@ const VERDICT_CLASS: Record<CompareRow["verdict"], string> = {
   new: "bg-blue-50 text-blue-700",
 };
 
+// How far the new price sits from the current market-best price, as a signed
+// percentage (negative = cheaper, positive = more expensive). Null when
+// there's no market-best price to compare against ("new item" rows) or it's
+// zero (would divide by zero). Note: compared as raw numbers, same as the
+// verdict logic above - no currency conversion, so this is only meaningful
+// when new price and current best are in the same currency.
+function diffPercent(r: CompareRow): number | null {
+  if (r.marketBestPrice === null || r.marketBestPrice === 0) return null;
+  return ((r.price - r.marketBestPrice) / r.marketBestPrice) * 100;
+}
+
+function formatDiffPercent(pct: number | null): string {
+  if (pct === null) return "—";
+  const sign = pct > 0 ? "+" : "";
+  return `${sign}${pct.toFixed(1)}%`;
+}
+
 // Exports whichever verdict tab is currently active (e.g. just the "cheaper
 // than market" rows), not the full unfiltered result set - the filter tabs
 // already narrow to what the user is looking at, and the download should
@@ -65,6 +82,7 @@ async function downloadCompareXlsx(filename: string, rows: CompareRow[]) {
     "Current best price": r.marketBestPrice ?? "",
     "Best currency": r.marketBestCurrency ?? "",
     "Best supplier": r.marketBestSupplier ?? "",
+    "Diff %": formatDiffPercent(diffPercent(r)),
     Verdict: VERDICT_LABEL[r.verdict],
   }));
 
@@ -79,6 +97,7 @@ async function downloadCompareXlsx(filename: string, rows: CompareRow[]) {
     { wch: 16 }, // Current best price
     { wch: 12 }, // Best currency
     { wch: 20 }, // Best supplier
+    { wch: 10 }, // Diff %
     { wch: 18 }, // Verdict
   ];
 
@@ -640,6 +659,7 @@ export default function ImportCheckPage() {
                   <th className="px-4 py-3">Supplier</th>
                   <th className="px-4 py-3">New price</th>
                   <th className="px-4 py-3">Current best</th>
+                  <th className="px-4 py-3">Diff %</th>
                   <th className="px-4 py-3">Verdict</th>
                 </tr>
               </thead>
@@ -660,6 +680,17 @@ export default function ImportCheckPage() {
                         ? `${r.marketBestPrice.toFixed(2)} ${r.marketBestCurrency} (${r.marketBestSupplier})`
                         : "—"}
                     </td>
+                    <td
+                      className={`px-4 py-3 font-medium ${
+                        r.verdict === "cheaper"
+                          ? "text-green-700"
+                          : r.verdict === "higher"
+                          ? "text-red-700"
+                          : "text-gray-400"
+                      }`}
+                    >
+                      {formatDiffPercent(diffPercent(r))}
+                    </td>
                     <td className="px-4 py-3">
                       <span
                         className={`rounded-full px-2 py-1 text-xs font-medium ${VERDICT_CLASS[r.verdict]}`}
@@ -671,7 +702,7 @@ export default function ImportCheckPage() {
                 ))}
                 {filteredRows.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="px-4 py-8 text-center text-gray-400">
+                    <td colSpan={6} className="px-4 py-8 text-center text-gray-400">
                       No rows match this filter.
                     </td>
                   </tr>
