@@ -78,17 +78,24 @@ export default function DashboardPage() {
   const [suppliers, setSuppliers] = useState<{ supplier: string; count: number }[]>([]);
   const [supplier, setSupplier] = useState("");
 
+  // Hides the original one-off bulk CSV import from this table by default,
+  // per the user's original request to not see "the old CSV I imported at
+  // the beginning" here. Toggle-able in case they ever need to see it.
+  const [hideBulkImport, setHideBulkImport] = useState(true);
+
   const load = async (opts?: {
     page?: number;
     search?: string;
     brand?: string;
     supplier?: string;
+    hideBulkImport?: boolean;
   }) => {
     setLoading(true);
     const targetPage = opts?.page ?? page;
     const targetSearch = opts?.search ?? search;
     const targetBrand = opts?.brand ?? brand;
     const targetSupplier = opts?.supplier ?? supplier;
+    const targetHideBulkImport = opts?.hideBulkImport ?? hideBulkImport;
     const params = new URLSearchParams({
       page: String(targetPage),
       limit: String(PAGE_SIZE),
@@ -96,6 +103,7 @@ export default function DashboardPage() {
     if (targetSearch) params.set("search", targetSearch);
     if (targetBrand) params.set("brand", targetBrand);
     if (targetSupplier) params.set("supplier", targetSupplier);
+    if (targetHideBulkImport) params.set("excludeBulkImport", "true");
     const res = await fetch(`/api/offers?${params.toString()}`);
     const data = await res.json();
     setOffers(data.offers ?? []);
@@ -177,6 +185,12 @@ export default function DashboardPage() {
     setSupplier(value);
     setPage(1);
     load({ page: 1, supplier: value });
+  };
+
+  const handleHideBulkImportChange = (value: boolean) => {
+    setHideBulkImport(value);
+    setPage(1);
+    load({ page: 1, hideBulkImport: value });
   };
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
@@ -414,6 +428,14 @@ export default function DashboardPage() {
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
             />
+            <label className="flex items-center gap-1.5 whitespace-nowrap text-sm text-gray-600">
+              <input
+                type="checkbox"
+                checked={hideBulkImport}
+                onChange={(e) => handleHideBulkImportChange(e.target.checked)}
+              />
+              Hide old bulk import
+            </label>
           </div>
         </div>
 

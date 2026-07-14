@@ -119,6 +119,13 @@ export type ListOffersParams = {
   // supplier name variants (see lib/supplierNormalize.ts) in one query.
   // Takes precedence over `supplier` when both are set.
   supplierIn?: string[];
+  // When true, excludes rows from the original one-off bulk CSV import. Those
+  // rows all carry a `notes` value of the form "Source: <brand tab name>"
+  // (see fixNumericBrands below) - a marker that normal day-to-day imports
+  // (Check New Prices, manual entry, edits) never produce organically. Used
+  // by the All Offers page so the old bulk import doesn't clutter the main
+  // table by default.
+  excludeBulkImport?: boolean;
   limit?: number;
   offset?: number;
 };
@@ -148,6 +155,7 @@ export async function listOffers(params: ListOffersParams = {}): Promise<ListOff
   const brandIn = params.brandIn?.map((b) => b.trim()).filter(Boolean);
   const supplier = params.supplier?.trim();
   const supplierIn = params.supplierIn?.map((s) => s.trim()).filter(Boolean);
+  const excludeBulkImport = params.excludeBulkImport === true;
 
   const conditions: string[] = [];
   const values: unknown[] = [];
@@ -172,6 +180,11 @@ export async function listOffers(params: ListOffersParams = {}): Promise<ListOff
     conditions.push(
       `(product ILIKE $${idx} OR brand ILIKE $${idx} OR supplier ILIKE $${idx} OR sku ILIKE $${idx})`
     );
+  }
+  if (excludeBulkImport) {
+    // Rows from the original one-off bulk CSV import all carry a notes value
+    // of "Source: <brand tab name>" - see fixNumericBrands below.
+    conditions.push(`(notes IS NULL OR notes NOT ILIKE 'Source:%')`);
   }
   const whereClause = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
 

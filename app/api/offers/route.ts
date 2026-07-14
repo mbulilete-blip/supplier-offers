@@ -29,6 +29,10 @@ export async function GET(req: NextRequest) {
   const page = searchParams.get("page") ? Number(searchParams.get("page")) : 1;
   const effectiveLimit = limit && !Number.isNaN(limit) ? limit : 100;
   const offset = (Math.max(page, 1) - 1) * effectiveLimit;
+  // Opt-in flag (used by the All Offers page) to hide rows from the original
+  // one-off bulk CSV import. Defaults to off so other consumers (Matrix,
+  // Compare, History) keep seeing the full data set unless they ask.
+  const excludeBulkImport = searchParams.get("excludeBulkImport") === "true";
 
   const { offers, total } = await listOffers({
     search,
@@ -38,6 +42,7 @@ export async function GET(req: NextRequest) {
     supplierIn,
     limit: effectiveLimit,
     offset,
+    excludeBulkImport,
   });
   return NextResponse.json({ offers, total, page: Math.max(page, 1), pageSize: effectiveLimit });
 }
