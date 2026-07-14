@@ -19,9 +19,14 @@ type CompareRow = {
   sku: string | null;
   price: number;
   currency: string;
+  // EUR-equivalent of `price`, computed server-side (see lib/currency.ts) so
+  // ranking/diffing across suppliers quoting in different currencies is
+  // actually comparable.
+  priceEur: number;
   marketBestPrice: number | null;
   marketBestSupplier: string | null;
   marketBestCurrency: string | null;
+  marketBestPriceEur: number | null;
   verdict: "cheaper" | "matches" | "higher" | "new";
 };
 
@@ -49,12 +54,12 @@ const VERDICT_CLASS: Record<CompareRow["verdict"], string> = {
 // How far the new price sits from the current market-best price, as a signed
 // percentage (negative = cheaper, positive = more expensive). Null when
 // there's no market-best price to compare against ("new item" rows) or it's
-// zero (would divide by zero). Note: compared as raw numbers, same as the
-// verdict logic above - no currency conversion, so this is only meaningful
-// when new price and current best are in the same currency.
+// zero (would divide by zero). Compared in EUR (priceEur/marketBestPriceEur,
+// computed server-side - see lib/currency.ts) so this stays meaningful even
+// when the new price and current best are quoted in different currencies.
 function diffPercent(r: CompareRow): number | null {
-  if (r.marketBestPrice === null || r.marketBestPrice === 0) return null;
-  return ((r.price - r.marketBestPrice) / r.marketBestPrice) * 100;
+  if (r.marketBestPriceEur === null || r.marketBestPriceEur === 0) return null;
+  return ((r.priceEur - r.marketBestPriceEur) / r.marketBestPriceEur) * 100;
 }
 
 function formatDiffPercent(pct: number | null): string {
@@ -87,15 +92,17 @@ function withBatchRanks(rows: CompareRow[]): RankedCompareRow[] {
   }
 
   // Ties share a rank (two suppliers at an identical price are joint-
-  // cheapest), same convention as the "matches" verdict above.
+  // cheapest), same convention as the "matches" verdict above. Sorted/tied by
+  // priceEur, not raw price - rows in this batch can quote in different
+  // currencies (see lib/currency.ts).
   const rankByRow = new Map<CompareRow, { rank: number; size: number }>();
   for (const group of groups.values()) {
-    const sorted = [...group].sort((a, b) => a.price - b.price);
+    const sorted = [...group].sort((a, b) => a.priceEur - b.priceEur);
     let rank = 0;
     let lastPrice: number | null = null;
     sorted.forEach((r, i) => {
-      if (lastPrice === null || r.price !== lastPrice) rank = i + 1;
-      lastPrice = r.price;
+      if (lastPrice === null || r.priceEur !== lastPrice) rank = i + 1;
+      lastPrice = r.priceEur;
       rankByRow.set(r, { rank, size: group.length });
     });
   }
