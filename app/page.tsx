@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Offer } from "@/lib/types";
 import EditOfferModal from "@/components/EditOfferModal";
 
@@ -13,6 +13,23 @@ type Stats = {
   addedToday: number;
   addedThisWeek: number;
 };
+
+type DailyReportBrand = { brand: string; count: number };
+type DailyReportSupplier = { supplier: string; offerCount: number; brands: DailyReportBrand[] };
+type DailyReport = {
+  date: string;
+  totalOffers: number;
+  supplierCount: number;
+  brandCount: number;
+  suppliers: DailyReportSupplier[];
+};
+type ReportDateCount = { date: string; count: number };
+
+// Local (not UTC) calendar date as YYYY-MM-DD - used for the daily report's
+// default date and the max= bound on its date picker, so "today" matches the
+// user's own clock rather than flipping over at UTC midnight.
+const pad = (n: number) => String(n).padStart(2, "0");
+const toLocalDateStr = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 
 // Compact relative timestamp for the "Latest offers" panel - "2h ago" reads
 // faster than a full date when you're just checking what came in recently.
@@ -36,6 +53,15 @@ export default function DashboardPage() {
 
   const [stats, setStats] = useState<Stats | null>(null);
   const [recentOffers, setRecentOffers] = useState<Offer[]>([]);
+
+  // Daily report: what came in on one calendar day, grouped by supplier ->
+  // brands. Defaults to today so the (much older) bulk CSV import doesn't
+  // show up unless the user explicitly picks that day.
+  const todayStr = useMemo(() => toLocalDateStr(new Date()), []);
+  const [reportDate, setReportDate] = useState(todayStr);
+  const [dailyReport, setDailyReport] = useState<DailyReport | null>(null);
+  const [loadingReport, setLoadingReport] = useState(true);
+  const [reportDates, setReportDates] = useState<ReportDateCount[]>([]);
 
   // searchInput tracks every keystroke; `search` is the debounced value that
   // actually triggers a (server-side, paginated) fetch, so typing doesn't
@@ -105,6 +131,14 @@ export default function DashboardPage() {
       .then((data) => setRecentOffers(Array.isArray(data) ? data : []));
   };
 
+  const loadDailyReport = (date: string) => {
+    setLoadingReport(true);
+    fetch(`/api/dashboard/daily-report?date=${date}`)
+      .then((r) => r.json())
+      .then((data) => setDailyReport(data))
+      .finally(() => setLoadingReport(false));
+  };
+
   useEffect(() => {
     load({ page: 1, search: "" });
     loadOverview();
@@ -114,8 +148,31 @@ export default function DashboardPage() {
     fetch("/api/suppliers")
       .then((r) => r.json())
       .then((data) => setSuppliers(Array.isArray(data) ? data : []));
+    fetch("/api/dashboard/report-dates")
+      .then((r) => r.json())
+      .then((data) => setReportDates(Array.isArray(data) ? data : []));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    loadDailyReport(reportDate);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reportDate]);
+
+  const shiftReportDate = (deltaDays: number) => {
+    const d = new Date(reportDate + "T00:00:00");
+    d.setDate(d.getDate() + deltaDays);
+    const next = toLocalDateStr(d);
+    if (next > todayStr) return; // no future dates
+    setReportDate(next);
+  };
+
+  const formatReportDate = (dateStr: string) =>
+    new Date(`${dateStr}T00:00:00`).toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
 
   const handleBrandChange = (value: string) => {
     setBrand(value);
@@ -142,6 +199,7 @@ export default function DashboardPage() {
     await fetch(`/api/offers/${id}`, { method: "DELETE" });
     load();
     loadOverview();
+    loadDailyReport(reportDate);
   };
 
   const handleImport = async () => {
@@ -160,6 +218,10 @@ export default function DashboardPage() {
       setCsvText("");
       load();
       loadOverview();
+      loadDailyReport(reportDate);
+      fetch("/api/dashboard/report-dates")
+        .then((r) => r.json())
+        .then((d) => setReportDates(Array.isArray(d) ? d : []));
     }
   };
 
@@ -183,6 +245,7 @@ export default function DashboardPage() {
     if (data.fixed > 0) {
       load();
       loadOverview();
+      loadDailyReport(reportDate);
       fetch("/api/brands")
         .then((r) => r.json())
         .then((d) => setBrands(Array.isArray(d) ? d : []));
@@ -213,6 +276,109 @@ export default function DashboardPage() {
             <div className="mt-0.5 text-xs text-gray-500">{c.label}</div>
           </div>
         ))}
+      </section>
+
+      <section className="rounded-xl border border-gray-200 bg-white p-6">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-medium">Daily report</h2>
+            <p className="mt-1 text-sm text-gray-500">
+              What came in on this day, by supplier and brand.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => shiftReportDate(-1)}
+              className="rounded-lg border border-gray-300 px-2.5 py-1.5 text-sm hover:bg-gray-50"
+              aria-label="Previous day"
+            >
+              ←
+            </button>
+            <input
+              type="date"
+              className="input"
+              value={reportDate}
+              max={todayStr}
+              onChange={(e) => e.target.value && setReportDate(e.target.value)}
+            />
+            <button
+              onClick={() => shiftReportDate(1)}
+              disabled={reportDate >= todayStr}
+              className="rounded-lg border border-gray-300 px-2.5 py-1.5 text-sm hover:bg-gray-50 disabled:opacity-40"
+              aria-label="Next day"
+            >
+              →
+            </button>
+            {reportDate !== todayStr && (
+              <button
+                onClick={() => setReportDate(todayStr)}
+                className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-50"
+              >
+                Today
+              </button>
+            )}
+          </div>
+        </div>
+
+        {loadingReport ? (
+          <p className="text-sm text-gray-400">Loading…</p>
+        ) : !dailyReport || dailyReport.totalOffers === 0 ? (
+          <div className="text-sm text-gray-500">
+            <p>No offers logged on {formatReportDate(reportDate)}.</p>
+            {reportDates.length > 0 && (
+              <p className="mt-2">
+                Days with offers:{" "}
+                {reportDates.slice(0, 8).map((d, i) => (
+                  <span key={d.date}>
+                    {i > 0 && ", "}
+                    <button
+                      onClick={() => setReportDate(d.date)}
+                      className="text-gray-700 underline hover:text-gray-900"
+                    >
+                      {formatReportDate(d.date)}
+                    </button>{" "}
+                    ({d.count})
+                  </span>
+                ))}
+              </p>
+            )}
+          </div>
+        ) : (
+          <>
+            <div className="mb-4 flex flex-wrap gap-4 text-sm text-gray-600">
+              <span>
+                <strong className="text-gray-900">{dailyReport.totalOffers}</strong> offer(s)
+              </span>
+              <span>
+                <strong className="text-gray-900">{dailyReport.supplierCount}</strong> supplier(s)
+              </span>
+              <span>
+                <strong className="text-gray-900">{dailyReport.brandCount}</strong> brand(s)
+              </span>
+            </div>
+            <div className="space-y-3">
+              {dailyReport.suppliers.map((s) => (
+                <div key={s.supplier} className="rounded-lg border border-gray-100 p-3">
+                  <div className="flex items-baseline justify-between gap-3">
+                    <span className="font-medium">{s.supplier}</span>
+                    <span className="text-xs text-gray-400">{s.offerCount} offer(s)</span>
+                  </div>
+                  <div className="mt-1.5 flex flex-wrap gap-1.5">
+                    {s.brands.map((b) => (
+                      <span
+                        key={b.brand}
+                        className="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-700"
+                      >
+                        {b.brand}
+                        {b.count > 1 ? ` (${b.count})` : ""}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
       </section>
 
       <section className="rounded-xl border border-gray-200 bg-white p-6">
@@ -478,6 +644,7 @@ export default function DashboardPage() {
             setEditingOffer(null);
             load();
             loadOverview();
+            loadDailyReport(reportDate);
           }}
         />
       )}

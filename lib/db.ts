@@ -604,6 +604,84 @@ export async function createOffers(inputs: OfferInput[]): Promise<number> {
   return count;
 }
 
+export type DailyReportBrand = { brand: string; count: number };
+export type DailyReportSupplier = { supplier: string; offerCount: number; brands: DailyReportBrand[] };
+export type DailyReport = {
+  date: string;
+  totalOffers: number;
+  supplierCount: number;
+  brandCount: number;
+  suppliers: DailyReportSupplier[];
+};
+
+// Report of what came in on one calendar day - for each supplier active that
+// day, which brands they quoted and how many offers, busiest supplier first.
+// Powers the "Daily report" panel on the All Offers page so the user can see
+// "what came in today, from whom, for which brands" without paging through
+// the full offers table (which sorts by product name, not date, and can run
+// into the tens of thousands of rows). `date` compares against
+// created_at::date, i.e. the database session's timezone (UTC on Neon by
+// default) - close enough for a daily digest.
+export async function getDailyReport(date: string): Promise<DailyReport> {
+  await ensureSchema();
+  const { rows } = await getPool().query(
+    `SELECT supplier, brand, COUNT(*)::int AS count
+     FROM offers
+     WHERE created_at::date = $1::date
+     GROUP BY supplier, brand
+     ORDER BY supplier ASC, brand ASC;`,
+    [date]
+  );
+
+  const bySupplier = new Map<string, DailyReportBrand[]>();
+  const brandSet = new Set<string>();
+  for (const row of rows) {
+    const brands = bySupplier.get(row.supplier) ?? [];
+    brands.push({ brand: row.brand, count: row.count });
+    bySupplier.set(row.supplier, brands);
+    brandSet.add(row.brand);
+  }
+
+  const suppliers: DailyReportSupplier[] = Array.from(bySupplier.entries())
+    .map(([supplier, brands]) => ({
+      supplier,
+      offerCount: brands.reduce((sum, b) => sum + b.count, 0),
+      brands,
+    }))
+    // Busiest supplier first - whoever sent the most today is the one worth
+    // checking in on, not just whoever sorts first alphabetically.
+    .sort((a, b) => b.offerCount - a.offerCount);
+
+  return {
+    date,
+    totalOffers: suppliers.reduce((sum, s) => sum + s.offerCount, 0),
+    supplierCount: suppliers.length,
+    brandCount: brandSet.size,
+    suppliers,
+  };
+}
+
+export type ReportDateCount = { date: string; count: number };
+
+// Distinct calendar days that have at least one offer, newest first - powers
+// the daily-report date picker's "days with data" hint, so picking a day
+// that turns out empty doesn't leave the user guessing what range actually
+// has anything in it. Capped well past any realistic lookback window.
+const MAX_REPORT_DATES = 180;
+
+export async function listReportDates(): Promise<ReportDateCount[]> {
+  await ensureSchema();
+  const { rows } = await getPool().query(
+    `SELECT to_char(created_at::date, 'YYYY-MM-DD') AS date, COUNT(*)::int AS count
+     FROM offers
+     GROUP BY created_at::date
+     ORDER BY created_at::date DESC
+     LIMIT $1;`,
+    [MAX_REPORT_DATES]
+  );
+  return rows.map((r) => ({ date: r.date, count: r.count }));
+}
+
 export async function updateOffer(id: number, input: Partial<OfferInput>): Promise<Offer | null> {
   await ensureSchema();
   const pool = getPool();
