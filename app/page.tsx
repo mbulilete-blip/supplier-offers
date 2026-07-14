@@ -78,13 +78,6 @@ export default function DashboardPage() {
   const [suppliers, setSuppliers] = useState<{ supplier: string; count: number }[]>([]);
   const [supplier, setSupplier] = useState("");
 
-  const [csvText, setCsvText] = useState("");
-  const [importing, setImporting] = useState(false);
-  const [importResult, setImportResult] = useState<{
-    imported: number;
-    errors: { line: number; message: string }[];
-  } | null>(null);
-
   const load = async (opts?: {
     page?: number;
     search?: string;
@@ -202,34 +195,6 @@ export default function DashboardPage() {
     loadDailyReport(reportDate);
   };
 
-  const handleImport = async () => {
-    if (!csvText.trim()) return;
-    setImporting(true);
-    setImportResult(null);
-    const res = await fetch("/api/offers/import", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ csv: csvText }),
-    });
-    const data = await res.json();
-    setImporting(false);
-    setImportResult(data);
-    if (data.imported > 0) {
-      setCsvText("");
-      load();
-      loadOverview();
-      loadDailyReport(reportDate);
-      fetch("/api/dashboard/report-dates")
-        .then((r) => r.json())
-        .then((d) => setReportDates(Array.isArray(d) ? d : []));
-    }
-  };
-
-  const handleFile = async (file: File) => {
-    const text = await file.text();
-    setCsvText(text);
-  };
-
   const [editingOffer, setEditingOffer] = useState<Offer | null>(null);
 
   const [fixingBrands, setFixingBrands] = useState(false);
@@ -257,7 +222,7 @@ export default function DashboardPage() {
       <section>
         <h1 className="text-2xl font-semibold">All Offers</h1>
         <p className="mt-1 text-sm text-gray-500">
-          Every offer you&apos;ve logged, across every supplier. Import a batch via CSV below.
+          Every offer you&apos;ve logged, across every supplier.
         </p>
       </section>
 
@@ -458,52 +423,6 @@ export default function DashboardPage() {
               ? `Fixed ${fixResult.fixed} offer(s) across brand(s): ${fixResult.brands.join(", ")}.`
               : "No numeric brand names found — nothing to fix."}
           </p>
-        )}
-      </section>
-
-      <section className="rounded-xl border border-gray-200 bg-white p-6">
-        <h2 className="mb-2 text-lg font-medium">Import from CSV</h2>
-        <p className="mb-4 text-sm text-gray-500">
-          Headers: <code>supplier, brand, product, sku, price, currency, rrp, moq,
-          leadTimeDays, paymentTerms, region, notes</code>. Only supplier, brand, product,
-          and price are required.
-        </p>
-        <input
-          type="file"
-          accept=".csv,text/csv"
-          onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])}
-          className="mb-3 block text-sm"
-        />
-        <textarea
-          className="input h-32 w-full font-mono text-xs"
-          placeholder="Paste CSV here, or upload a file above"
-          value={csvText}
-          onChange={(e) => setCsvText(e.target.value)}
-        />
-        <div className="mt-3 flex items-center gap-3">
-          <button
-            onClick={handleImport}
-            disabled={importing || !csvText.trim()}
-            className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-700 disabled:opacity-50"
-          >
-            {importing ? "Importing…" : "Import CSV"}
-          </button>
-          {importResult && (
-            <span className="text-sm text-gray-600">
-              Imported {importResult.imported} offer(s).
-              {importResult.errors.length > 0 &&
-                ` ${importResult.errors.length} row(s) skipped.`}
-            </span>
-          )}
-        </div>
-        {importResult && importResult.errors.length > 0 && (
-          <ul className="mt-2 list-disc pl-5 text-xs text-red-600">
-            {importResult.errors.map((e, i) => (
-              <li key={i}>
-                Line {e.line}: {e.message}
-              </li>
-            ))}
-          </ul>
         )}
       </section>
 
