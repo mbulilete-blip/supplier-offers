@@ -22,6 +22,10 @@ type InquiryItem = {
   product: string;
   sku: string | null;
   qty: number | null;
+  // Client's target/asking price for this line, if the uploaded list had a
+  // price column - see lib/inquiryImport.ts.
+  targetPrice: number | null;
+  targetCurrency: string | null;
 };
 
 type InquiryResultRow = {
@@ -35,7 +39,15 @@ type MatchResponse = {
   truncated: boolean;
 };
 
-const ROLE_OPTIONS: InquiryColumnRole[] = ["product", "brand", "sku", "qty", "ignore"];
+const ROLE_OPTIONS: InquiryColumnRole[] = [
+  "product",
+  "brand",
+  "sku",
+  "qty",
+  "targetPrice",
+  "currency",
+  "ignore",
+];
 
 const CUSTOMER_TYPES = ["Retailer", "Distributor", "Export partner", "Other"];
 
@@ -105,6 +117,8 @@ function buildResultsCsv(results: InquiryResultRow[]): string {
     "Requested brand",
     "Requested SKU",
     "Requested qty",
+    "Target price",
+    "Target currency",
     "Supplier",
     "Price",
     "Currency",
@@ -125,7 +139,28 @@ function buildResultsCsv(results: InquiryResultRow[]): string {
   for (const { item, offers } of results) {
     if (offers.length === 0) {
       lines.push(
-        [item.product, item.brand ?? "", item.sku ?? "", item.qty ?? "", "No match found", "", "", "", "", "", "", "", "", "", "", "", "", ""]
+        [
+          item.product,
+          item.brand ?? "",
+          item.sku ?? "",
+          item.qty ?? "",
+          item.targetPrice ?? "",
+          item.targetCurrency ?? "",
+          "No match found",
+          "",
+          "",
+          "",
+          "",
+          "",
+          "",
+          "",
+          "",
+          "",
+          "",
+          "",
+          "",
+          "",
+        ]
           .map(csvEscape)
           .join(",")
       );
@@ -141,6 +176,8 @@ function buildResultsCsv(results: InquiryResultRow[]): string {
           item.brand ?? "",
           item.sku ?? "",
           item.qty ?? "",
+          item.targetPrice ?? "",
+          item.targetCurrency ?? "",
           o.supplier,
           o.price.toFixed(2),
           o.currency,
@@ -207,17 +244,25 @@ export default function InquiryPage() {
     setSaveQuoteError(null);
   };
 
-  const getQuoteLine = (i: number, offers: Offer[]): QuoteLineState => {
+  // Defaults the sell price/currency from the uploaded target-price column
+  // (see lib/inquiryImport.ts) so a bulk-uploaded client price list shows
+  // margins immediately - no manual typing required unless the user wants
+  // to override the client's asking price.
+  const getQuoteLine = (i: number, offers: Offer[], item: InquiryItem): QuoteLineState => {
     const existing = quoteLines[i];
     if (existing) return existing;
     const best = offers.slice().sort((a, b) => a.price - b.price)[0];
-    return { offerId: best?.id ?? null, sellPrice: "", sellCurrency: "EUR" };
+    return {
+      offerId: best?.id ?? null,
+      sellPrice: item.targetPrice !== null ? String(item.targetPrice) : "",
+      sellCurrency: item.targetCurrency ?? "EUR",
+    };
   };
 
-  const updateQuoteLine = (i: number, offers: Offer[], patch: Partial<QuoteLineState>) => {
+  const updateQuoteLine = (i: number, offers: Offer[], item: InquiryItem, patch: Partial<QuoteLineState>) => {
     setQuoteLines((prev) => ({
       ...prev,
-      [i]: { ...getQuoteLine(i, offers), ...patch },
+      [i]: { ...getQuoteLine(i, offers, item), ...patch },
     }));
     setSavedQuoteId(null);
   };
@@ -244,7 +289,7 @@ export default function InquiryPage() {
 
     const items = response.results
       .map((r, i) => {
-        const line = getQuoteLine(i, r.offers);
+        const line = getQuoteLine(i, r.offers, r.item);
         const sellNum = parseFloat(line.sellPrice);
         if (!line.sellPrice.trim() || Number.isNaN(sellNum)) return null;
         const costOffer = r.offers.find((o) => o.id === line.offerId);
@@ -387,8 +432,8 @@ export default function InquiryPage() {
 
   const quotableCount = response
     ? response.results.filter((r, i) => {
-        const line = quoteLines[i];
-        return line && line.sellPrice.trim() && !Number.isNaN(parseFloat(line.sellPrice));
+        const line = getQuoteLine(i, r.offers, r.item);
+        return line.sellPrice.trim() && !Number.isNaN(parseFloat(line.sellPrice));
       }).length
     : 0;
 
@@ -409,7 +454,9 @@ export default function InquiryPage() {
         <div>
           <label className="block text-sm font-medium text-gray-700">Upload a file</label>
           <p className="mt-1 text-xs text-gray-500">
-            Excel (.xlsx/.xls) or CSV/text, with or without column headers.
+            Excel (.xlsx/.xls) or CSV/text, with or without column headers. If the file has a
+            price column, it&apos;s auto-detected as the client&apos;s target price and pre-fills
+            the sell price and margin below - no manual entry needed.
           </p>
           <input
             type="file"
@@ -583,7 +630,7 @@ export default function InquiryPage() {
             {filteredResults.map(({ item, offers, index }) => {
               const sorted = offers.slice().sort((a, b) => a.price - b.price);
               const bestPrice = sorted[0]?.price;
-              const line = getQuoteLine(index, offers);
+              const line = getQuoteLine(index, offers, item);
               const costOffer = sorted.find((o) => o.id === line.offerId);
               const { costEur, sellEur, marginEur, marginPct } = computeMargin(costOffer, line);
               return (
@@ -633,7 +680,7 @@ export default function InquiryPage() {
                                     type="radio"
                                     name={`cost-basis-${index}`}
                                     checked={line.offerId === o.id}
-                                    onChange={() => updateQuoteLine(index, offers, { offerId: o.id })}
+                                    onChange={() => updateQuoteLine(index, offers, item, { offerId: o.id })}
                                   />
                                 </td>
                                 <td className="py-2 pr-4 font-medium">
@@ -681,14 +728,19 @@ export default function InquiryPage() {
 
                     <div className="mt-3 flex flex-wrap items-end gap-3 rounded-lg bg-gray-50 p-3">
                       <div>
-                        <label className="block text-xs font-medium text-gray-500">Sell price</label>
+                        <label className="block text-xs font-medium text-gray-500">
+                          Sell price
+                          {item.targetPrice !== null && (
+                            <span className="ml-1 font-normal text-gray-400">(from uploaded list)</span>
+                          )}
+                        </label>
                         <input
                           type="number"
                           step="0.01"
                           className="input mt-1 w-28 text-sm"
                           placeholder="0.00"
                           value={line.sellPrice}
-                          onChange={(e) => updateQuoteLine(index, offers, { sellPrice: e.target.value })}
+                          onChange={(e) => updateQuoteLine(index, offers, item, { sellPrice: e.target.value })}
                         />
                       </div>
                       <div>
@@ -696,7 +748,7 @@ export default function InquiryPage() {
                         <select
                           className="input mt-1 text-sm"
                           value={line.sellCurrency}
-                          onChange={(e) => updateQuoteLine(index, offers, { sellCurrency: e.target.value })}
+                          onChange={(e) => updateQuoteLine(index, offers, item, { sellCurrency: e.target.value })}
                         >
                           {SUPPORTED_CURRENCIES.map((c) => (
                             <option key={c} value={c}>

@@ -10,7 +10,15 @@
 // the "Check New Prices" importer the user already knows.
 // ---------------------------------------------------------------------------
 
-export type InquiryColumnRole = "ignore" | "brand" | "product" | "sku" | "qty" | "extra";
+export type InquiryColumnRole =
+  | "ignore"
+  | "brand"
+  | "product"
+  | "sku"
+  | "qty"
+  | "targetPrice"
+  | "currency"
+  | "extra";
 
 export const INQUIRY_ROLE_LABELS: Record<InquiryColumnRole, string> = {
   ignore: "Ignore",
@@ -18,6 +26,11 @@ export const INQUIRY_ROLE_LABELS: Record<InquiryColumnRole, string> = {
   product: "Product name",
   sku: "SKU / EAN / Barcode",
   qty: "Quantity",
+  // A client's target/asking price for this line - lets a whole price list
+  // be uploaded and pre-fill the sell-price field on every matched item
+  // instead of typing it in by hand (see buildInquiryItems below).
+  targetPrice: "Target price (client's)",
+  currency: "Currency",
   extra: "Extra (kept as note)",
 };
 
@@ -31,12 +44,28 @@ const KEYWORDS: Partial<Record<InquiryColumnRole, string[]>> = {
   sku: ["ean", "gtin", "barcode", "upc", "sku", "codigo", "código", "product code", "item code", "reference", "ref"],
   brand: ["brand", "marca"],
   qty: ["qty", "quantity", "units", "pieces", "pcs", "amount", "cantidad"],
+  currency: ["currency", "curr", "ccy", "moneda", "divisa"],
+  targetPrice: [
+    "target price",
+    "target",
+    "asking price",
+    "asking",
+    "sell price",
+    "sale price",
+    "client price",
+    "buyer price",
+    "precio objetivo",
+    "precio",
+    "price",
+  ],
   product: ["product", "description", "name", "article", "item", "title"],
 };
 
 // Product is checked last since it's the most generic keyword set and would
-// otherwise swallow columns that are actually SKU/brand/qty.
-const ROLE_PRIORITY: InquiryColumnRole[] = ["sku", "brand", "qty", "product"];
+// otherwise swallow columns that are actually SKU/brand/qty/price/currency.
+// currency/targetPrice are checked before the generic product fallback but
+// after the more specific sku/brand/qty roles.
+const ROLE_PRIORITY: InquiryColumnRole[] = ["sku", "brand", "qty", "currency", "targetPrice", "product"];
 
 function normalize(h: string): string {
   return h
@@ -116,6 +145,11 @@ export type InquiryItem = {
   product: string;
   sku: string | null;
   qty: number | null;
+  // Client's target/asking price for this line, if the uploaded list had a
+  // price column - pre-fills the sell price on the Inquiry results so quoting
+  // a whole list doesn't mean typing in every price by hand.
+  targetPrice: number | null;
+  targetCurrency: string | null;
 };
 
 export type BuildInquiryResult = {
@@ -136,6 +170,8 @@ export function buildInquiryItems(
   const brandCol = firstByRole("brand");
   const skuCol = firstByRole("sku");
   const qtyCol = firstByRole("qty");
+  const targetPriceCol = firstByRole("targetPrice");
+  const currencyCol = firstByRole("currency");
 
   const dataRows = headerRowIndex >= 0 ? rows.slice(headerRowIndex + 1) : rows;
 
@@ -153,12 +189,23 @@ export function buildInquiryItems(
     const qtyRaw = qtyCol ? r[qtyCol.index]?.trim() : "";
     const qty = qtyRaw ? Number(qtyRaw.replace(",", ".")) : null;
 
+    // Target price cells often come with currency symbols/thousands
+    // separators attached (e.g. "€12,50", "$ 8.00") - strip anything that
+    // isn't a digit, dot, or comma before parsing, same tolerant approach
+    // smartImport.ts uses for supplier prices.
+    const targetPriceRaw = targetPriceCol ? r[targetPriceCol.index]?.trim() : "";
+    const targetPriceCleaned = targetPriceRaw ? targetPriceRaw.replace(/[^\d.,]/g, "").replace(",", ".") : "";
+    const targetPrice = targetPriceCleaned ? Number(targetPriceCleaned) : null;
+    const targetCurrency = currencyCol ? r[currencyCol.index]?.trim().toUpperCase() || null : null;
+
     items.push({
       raw: r.join(" "),
       brand,
       product,
       sku,
       qty: qty !== null && Number.isFinite(qty) ? qty : null,
+      targetPrice: targetPrice !== null && Number.isFinite(targetPrice) ? targetPrice : null,
+      targetCurrency,
     });
   });
 

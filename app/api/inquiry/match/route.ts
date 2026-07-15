@@ -19,6 +19,8 @@ export type InquiryRequestItem = {
   product: string;
   sku: string | null;
   qty: number | null;
+  targetPrice: number | null;
+  targetCurrency: string | null;
 };
 
 export type InquiryResultRow = {
