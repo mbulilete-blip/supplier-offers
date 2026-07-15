@@ -454,13 +454,13 @@ export default function InquiryPage() {
         <div>
           <label className="block text-sm font-medium text-gray-700">Upload a file</label>
           <p className="mt-1 text-xs text-gray-500">
-            Excel (.xlsx/.xls) or CSV/text, with or without column headers. If the file has a
-            price column, it&apos;s auto-detected as the client&apos;s target price and pre-fills
-            the sell price and margin below - no manual entry needed.
+            Excel (.xlsx/.xls), with or without column headers. If the file has a price column,
+            it&apos;s auto-detected as the client&apos;s target price and pre-fills the sell price
+            and margin below - no manual entry needed.
           </p>
           <input
             type="file"
-            accept=".csv,.tsv,.txt,.xlsx,.xls,text/csv"
+            accept=".xlsx,.xls"
             onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])}
             className="mt-2 block text-sm"
           />

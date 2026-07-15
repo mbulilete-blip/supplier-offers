@@ -217,26 +217,24 @@ export function parseDelimited(text: string, delimiter: string): string[][] {
   return rows.filter((r) => r.some((cell) => cell.trim() !== ""));
 }
 
-// Reads any supported file type (.xlsx/.xls via SheetJS, otherwise
-// delimiter-sniffed text) into a plain grid of strings.
+// Excel-only file uploads: .xlsx/.xls via SheetJS. CSV/TSV/plain-text files
+// are rejected here with a clear error rather than silently falling back to
+// delimiter-sniffed parsing — the pasted-list box (which reuses
+// detectDelimiter/parseDelimited below) remains the path for plain text.
 export async function readFileAsRows(file: File): Promise<string[][]> {
   const name = file.name.toLowerCase();
-  if (name.endsWith(".xlsx") || name.endsWith(".xls")) {
-    const XLSX = await import("xlsx");
-    const buf = await file.arrayBuffer();
-    const workbook = XLSX.read(buf, { type: "array" });
-    const sheetName = workbook.SheetNames[0];
-    const sheet = workbook.Sheets[sheetName];
-    const raw = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: "", raw: false }) as unknown[][];
-    return raw
-      .map((r) => r.map((c) => String(c ?? "").trim()))
-      .filter((r) => r.some((cell) => cell !== ""));
+  if (!name.endsWith(".xlsx") && !name.endsWith(".xls")) {
+    throw new Error("Only Excel files (.xlsx/.xls) are supported for upload. Paste text lists instead.");
   }
-
-  const text = await file.text();
-  const firstLine = text.split(/\r?\n/).find((l) => l.trim() !== "") ?? "";
-  const delimiter = detectDelimiter(firstLine);
-  return parseDelimited(text, delimiter);
+  const XLSX = await import("xlsx");
+  const buf = await file.arrayBuffer();
+  const workbook = XLSX.read(buf, { type: "array" });
+  const sheetName = workbook.SheetNames[0];
+  const sheet = workbook.Sheets[sheetName];
+  const raw = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: "", raw: false }) as unknown[][];
+  return raw
+    .map((r) => r.map((c) => String(c ?? "").trim()))
+    .filter((r) => r.some((cell) => cell !== ""));
 }
 
 // ---------------------------------------------------------------------------

@@ -391,16 +391,16 @@ export default function ImportCheckPage() {
       <section>
         <h1 className="text-2xl font-semibold">Check New Prices</h1>
         <p className="mt-1 text-sm text-gray-500">
-          Upload a supplier price list in whatever format it comes in — Excel (.xlsx/.xls) or
-          CSV/text with any delimiter and any column headers. Columns are detected automatically;
-          confirm or correct the mapping below before comparing or importing.
+          Upload a supplier price list as Excel (.xlsx/.xls), any layout, any column headers.
+          Columns are detected automatically; confirm or correct the mapping below before
+          comparing or importing.
         </p>
       </section>
 
       <section className="rounded-xl border border-gray-200 bg-white p-6">
         <input
           type="file"
-          accept=".csv,.tsv,.txt,.xlsx,.xls,text/csv"
+          accept=".xlsx,.xls"
           onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])}
           className="block text-sm"
         />
