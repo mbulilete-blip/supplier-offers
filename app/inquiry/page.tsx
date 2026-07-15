@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { Offer } from "@/lib/types";
 import EditOfferModal from "@/components/EditOfferModal";
-import { EurRates, SUPPORTED_CURRENCIES, toEur } from "@/lib/currency";
+import { EurRates, formatEur, SUPPORTED_CURRENCIES, toEur } from "@/lib/currency";
 import {
   InquiryColumnMapping,
   InquiryColumnRole,
@@ -758,7 +758,7 @@ export default function InquiryPage() {
                         </select>
                       </div>
                       <div className="text-sm text-gray-600">
-                        {costEur !== null && <span>Cost ≈ {costEur.toFixed(2)} EUR</span>}
+                        {costEur !== null && <span>Cost ≈ {formatEur(costEur)} EUR</span>}
                         {sellEur !== null && costEur !== null && (
                           <span className="ml-3">
                             Margin:{" "}
@@ -767,7 +767,7 @@ export default function InquiryPage() {
                                 marginEur !== null && marginEur < 0 ? "text-red-600" : "text-green-700"
                               }`}
                             >
-                              {marginEur !== null ? `${marginEur >= 0 ? "+" : ""}${marginEur.toFixed(2)} EUR` : "—"}
+                              {marginEur !== null ? `${marginEur >= 0 ? "+" : ""}${formatEur(marginEur)} EUR` : "—"}
                               {marginPct !== null ? ` (${marginPct.toFixed(0)}%)` : ""}
                             </span>
                           </span>

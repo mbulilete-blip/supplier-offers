@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { EurRates, toEur } from "@/lib/currency";
+import { EurRates, formatEur, formatMoney, toEur } from "@/lib/currency";
 
 type QuoteStatus = "quoted" | "won" | "lost" | "shipped";
 
@@ -256,16 +256,16 @@ export default function QuotesPage() {
                           {totals && (
                             <div className="flex flex-wrap gap-4 text-sm text-gray-600">
                               <span>
-                                Cost ≈ <strong className="text-gray-900">{totals.costEur.toFixed(2)} EUR</strong>
+                                Cost ≈ <strong className="text-gray-900">{formatEur(totals.costEur)} EUR</strong>
                               </span>
                               <span>
-                                Sell ≈ <strong className="text-gray-900">{totals.sellEur.toFixed(2)} EUR</strong>
+                                Sell ≈ <strong className="text-gray-900">{formatEur(totals.sellEur)} EUR</strong>
                               </span>
                               <span>
                                 Margin:{" "}
                                 <strong className={totals.marginEur < 0 ? "text-red-600" : "text-green-700"}>
                                   {totals.marginEur >= 0 ? "+" : ""}
-                                  {totals.marginEur.toFixed(2)} EUR
+                                  {formatEur(totals.marginEur)} EUR
                                   {totals.marginPct !== null ? ` (${totals.marginPct.toFixed(0)}%)` : ""}
                                 </strong>
                               </span>
@@ -307,16 +307,16 @@ export default function QuotesPage() {
                                     <td className="py-2 pr-4">{it.qty ?? "—"}</td>
                                     <td className="py-2 pr-4">{it.supplier ?? "—"}</td>
                                     <td className="py-2 pr-4">
-                                      {it.costPrice !== null ? `${it.costPrice.toFixed(2)} ${it.costCurrency}` : "—"}
+                                      {it.costPrice !== null ? `${formatMoney(it.costPrice)} ${it.costCurrency}` : "—"}
                                     </td>
                                     <td className="py-2 pr-4">
-                                      {it.sellPrice !== null ? `${it.sellPrice.toFixed(2)} ${it.sellCurrency}` : "—"}
+                                      {it.sellPrice !== null ? `${formatMoney(it.sellPrice)} ${it.sellCurrency}` : "—"}
                                     </td>
                                     <td className="py-2 pr-4">
                                       {marginEur !== null ? (
                                         <span className={marginEur < 0 ? "text-red-600" : "text-green-700"}>
                                           {marginEur >= 0 ? "+" : ""}
-                                          {marginEur.toFixed(2)} EUR
+                                          {formatEur(marginEur)} EUR
                                           {marginPct !== null ? ` (${marginPct.toFixed(0)}%)` : ""}
                                         </span>
                                       ) : (

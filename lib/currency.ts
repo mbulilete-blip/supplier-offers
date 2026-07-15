@@ -83,3 +83,17 @@ export function toEur(amount: number, currency: string | null | undefined, rates
   const rate = rates[key] ?? 1;
   return amount * rate;
 }
+
+// Formats a money amount with thousands separators (e.g. "197,639.26")
+// instead of the plain toFixed(2) output ("197639.26") that's hard to scan
+// at a glance for the totals/margins this app deals in. Fixed to en-US
+// grouping regardless of browser locale so figures are consistent wherever
+// they're shown side by side. Currency-agnostic - works for EUR totals as
+// well as native-currency offer/quote amounts.
+export function formatMoney(amount: number): string {
+  return amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+// Alias for call sites that are specifically formatting a converted EUR
+// figure - same formatting, just a clearer name at those call sites.
+export const formatEur = formatMoney;
