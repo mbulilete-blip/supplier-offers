@@ -84,14 +84,15 @@ export function toEur(amount: number, currency: string | null | undefined, rates
   return amount * rate;
 }
 
-// Formats a money amount with thousands separators (e.g. "197,639.26")
-// instead of the plain toFixed(2) output ("197639.26") that's hard to scan
-// at a glance for the totals/margins this app deals in. Fixed to en-US
-// grouping regardless of browser locale so figures are consistent wherever
-// they're shown side by side. Currency-agnostic - works for EUR totals as
-// well as native-currency offer/quote amounts.
+// Formats a money amount European-style - "." as the thousands separator,
+// "," as the decimal separator (e.g. "197.639,26") - matching how EUR
+// figures are conventionally written in this app's markets, rather than the
+// US convention ("197,639.26"). Fixed to de-DE grouping regardless of
+// browser locale so figures are consistent wherever they're shown side by
+// side. Currency-agnostic - works for EUR totals as well as native-currency
+// offer/quote amounts.
 export function formatMoney(amount: number): string {
-  return amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return amount.toLocaleString("de-DE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 // Alias for call sites that are specifically formatting a converted EUR
