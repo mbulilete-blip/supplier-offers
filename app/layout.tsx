@@ -27,6 +27,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <Link href="/inquiry" className="hover:text-gray-900">
                 Sourcing Inquiry
               </Link>
+              <Link href="/quotes" className="hover:text-gray-900">
+                Sales Pipeline
+              </Link>
               <Link href="/history" className="hover:text-gray-900">
                 History
               </Link>

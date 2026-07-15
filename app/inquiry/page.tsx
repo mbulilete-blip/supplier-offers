@@ -1,8 +1,10 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
 import { Offer } from "@/lib/types";
 import EditOfferModal from "@/components/EditOfferModal";
+import { EurRates, SUPPORTED_CURRENCIES, toEur } from "@/lib/currency";
 import {
   InquiryColumnMapping,
   InquiryColumnRole,
@@ -34,6 +36,18 @@ type MatchResponse = {
 };
 
 const ROLE_OPTIONS: InquiryColumnRole[] = ["product", "brand", "sku", "qty", "ignore"];
+
+const CUSTOMER_TYPES = ["Retailer", "Distributor", "Export partner", "Other"];
+
+// Per-item quoting state on the results table: which offer to cost the line
+// from (defaults to the best price), plus the sell price/currency the user
+// wants to propose to this customer. A line only gets included when saving a
+// quote once a sell price has actually been typed in.
+type QuoteLineState = {
+  offerId: number | null;
+  sellPrice: string;
+  sellCurrency: string;
+};
 
 const isToday = (iso: string): boolean => {
   const d = new Date(iso);
@@ -165,9 +179,117 @@ export default function InquiryPage() {
   const [filter, setFilter] = useState<"all" | "matched" | "unmatched">("all");
   const [editingOffer, setEditingOffer] = useState<Offer | null>(null);
 
+  // EUR conversion rates, loaded once per visit - same pattern as the Price
+  // Matrix page - so margin math is correct even when the cost offer and the
+  // proposed sell price are quoted in different currencies.
+  const [eurRates, setEurRates] = useState<EurRates>({ EUR: 1 });
+  useEffect(() => {
+    fetch("/api/fx-rates")
+      .then((r) => r.json())
+      .then((data) => setEurRates((prev) => (data && typeof data === "object" ? data : prev)));
+  }, []);
+
+  // Keyed by index into response.results.
+  const [quoteLines, setQuoteLines] = useState<Record<number, QuoteLineState>>({});
+  const [customerName, setCustomerName] = useState("");
+  const [customerType, setCustomerType] = useState(CUSTOMER_TYPES[0]);
+  const [customerRegion, setCustomerRegion] = useState("");
+  const [quoteNotes, setQuoteNotes] = useState("");
+  const [savingQuote, setSavingQuote] = useState(false);
+  const [saveQuoteError, setSaveQuoteError] = useState<string | null>(null);
+  const [savedQuoteId, setSavedQuoteId] = useState<number | null>(null);
+
   const resetResults = () => {
     setResponse(null);
     setMatchError(null);
+    setQuoteLines({});
+    setSavedQuoteId(null);
+    setSaveQuoteError(null);
+  };
+
+  const getQuoteLine = (i: number, offers: Offer[]): QuoteLineState => {
+    const existing = quoteLines[i];
+    if (existing) return existing;
+    const best = offers.slice().sort((a, b) => a.price - b.price)[0];
+    return { offerId: best?.id ?? null, sellPrice: "", sellCurrency: "EUR" };
+  };
+
+  const updateQuoteLine = (i: number, offers: Offer[], patch: Partial<QuoteLineState>) => {
+    setQuoteLines((prev) => ({
+      ...prev,
+      [i]: { ...getQuoteLine(i, offers), ...patch },
+    }));
+    setSavedQuoteId(null);
+  };
+
+  const computeMargin = (
+    costOffer: Offer | undefined,
+    line: QuoteLineState
+  ): { costEur: number | null; sellEur: number | null; marginEur: number | null; marginPct: number | null } => {
+    const costEur = costOffer ? toEur(costOffer.price, costOffer.currency, eurRates) : null;
+    const sellNum = parseFloat(line.sellPrice);
+    const sellEur = line.sellPrice.trim() && !Number.isNaN(sellNum) ? toEur(sellNum, line.sellCurrency, eurRates) : null;
+    const marginEur = costEur !== null && sellEur !== null ? sellEur - costEur : null;
+    const marginPct = marginEur !== null && sellEur ? (marginEur / sellEur) * 100 : null;
+    return { costEur, sellEur, marginEur, marginPct };
+  };
+
+  const handleSaveQuote = async () => {
+    if (!response) return;
+    setSaveQuoteError(null);
+    if (!customerName.trim()) {
+      setSaveQuoteError("Enter a customer name first.");
+      return;
+    }
+
+    const items = response.results
+      .map((r, i) => {
+        const line = getQuoteLine(i, r.offers);
+        const sellNum = parseFloat(line.sellPrice);
+        if (!line.sellPrice.trim() || Number.isNaN(sellNum)) return null;
+        const costOffer = r.offers.find((o) => o.id === line.offerId);
+        if (!costOffer) return null;
+        return {
+          offerId: costOffer.id,
+          brand: r.item.brand,
+          product: r.item.product,
+          sku: r.item.sku,
+          qty: r.item.qty,
+          supplier: costOffer.supplier,
+          costPrice: costOffer.price,
+          costCurrency: costOffer.currency,
+          sellPrice: sellNum,
+          sellCurrency: line.sellCurrency,
+        };
+      })
+      .filter((x): x is NonNullable<typeof x> => x !== null);
+
+    if (items.length === 0) {
+      setSaveQuoteError("Enter a sell price for at least one item before saving.");
+      return;
+    }
+
+    setSavingQuote(true);
+    try {
+      const res = await fetch("/api/quotes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          customerName,
+          customerType,
+          region: customerRegion || null,
+          notes: quoteNotes || null,
+          items,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Failed to save quote.");
+      setSavedQuoteId(data.id);
+    } catch (err) {
+      setSaveQuoteError(err instanceof Error ? err.message : "Failed to save quote.");
+    } finally {
+      setSavingQuote(false);
+    }
   };
 
   const loadGrid = (grid: string[][], name: string) => {
@@ -229,6 +351,9 @@ export default function InquiryPage() {
     setMatching(true);
     setMatchError(null);
     setResponse(null);
+    setQuoteLines({});
+    setSavedQuoteId(null);
+    setSaveQuoteError(null);
     try {
       const res = await fetch("/api/inquiry/match", {
         method: "POST",
@@ -251,12 +376,21 @@ export default function InquiryPage() {
   };
 
   const filteredResults = response
-    ? response.results.filter((r) => {
-        if (filter === "matched") return r.offers.length > 0;
-        if (filter === "unmatched") return r.offers.length === 0;
-        return true;
-      })
+    ? response.results
+        .map((r, index) => ({ ...r, index }))
+        .filter((r) => {
+          if (filter === "matched") return r.offers.length > 0;
+          if (filter === "unmatched") return r.offers.length === 0;
+          return true;
+        })
     : [];
+
+  const quotableCount = response
+    ? response.results.filter((r, i) => {
+        const line = quoteLines[i];
+        return line && line.sellPrice.trim() && !Number.isNaN(parseFloat(line.sellPrice));
+      }).length
+    : 0;
 
   const headerRowPreview = rows.slice(0, Math.min(10, rows.length));
 
@@ -446,11 +580,14 @@ export default function InquiryPage() {
           )}
 
           <div className="space-y-6">
-            {filteredResults.map(({ item, offers }, i) => {
+            {filteredResults.map(({ item, offers, index }) => {
               const sorted = offers.slice().sort((a, b) => a.price - b.price);
               const bestPrice = sorted[0]?.price;
+              const line = getQuoteLine(index, offers);
+              const costOffer = sorted.find((o) => o.id === line.offerId);
+              const { costEur, sellEur, marginEur, marginPct } = computeMargin(costOffer, line);
               return (
-                <div key={i} className="rounded-xl border border-gray-200 bg-white p-5">
+                <div key={index} className="rounded-xl border border-gray-200 bg-white p-5">
                   <div className="mb-3 flex items-baseline justify-between gap-3">
                     <h2 className="text-lg font-medium">
                       {item.product}{" "}
@@ -465,10 +602,12 @@ export default function InquiryPage() {
                   {sorted.length === 0 ? (
                     <p className="text-sm text-gray-400">No matching offers found for this item.</p>
                   ) : (
+                    <>
                     <div className="overflow-x-auto">
                       <table className="w-full text-left text-sm">
                         <thead className="border-b border-gray-200 text-xs uppercase text-gray-500">
                           <tr>
+                            <th className="py-2 pr-4">Cost from</th>
                             <th className="py-2 pr-4">Supplier</th>
                             <th className="py-2 pr-4">Price</th>
                             <th className="py-2 pr-4">Added</th>
@@ -489,6 +628,14 @@ export default function InquiryPage() {
                                 key={o.id}
                                 className={`border-b border-gray-100 last:border-0 ${isBest ? "bg-green-50" : ""}`}
                               >
+                                <td className="py-2 pr-4">
+                                  <input
+                                    type="radio"
+                                    name={`cost-basis-${index}`}
+                                    checked={line.offerId === o.id}
+                                    onChange={() => updateQuoteLine(index, offers, { offerId: o.id })}
+                                  />
+                                </td>
                                 <td className="py-2 pr-4 font-medium">
                                   {o.supplier}
                                   {isBest && (
@@ -531,10 +678,125 @@ export default function InquiryPage() {
                         </tbody>
                       </table>
                     </div>
+
+                    <div className="mt-3 flex flex-wrap items-end gap-3 rounded-lg bg-gray-50 p-3">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500">Sell price</label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          className="input mt-1 w-28 text-sm"
+                          placeholder="0.00"
+                          value={line.sellPrice}
+                          onChange={(e) => updateQuoteLine(index, offers, { sellPrice: e.target.value })}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500">Currency</label>
+                        <select
+                          className="input mt-1 text-sm"
+                          value={line.sellCurrency}
+                          onChange={(e) => updateQuoteLine(index, offers, { sellCurrency: e.target.value })}
+                        >
+                          {SUPPORTED_CURRENCIES.map((c) => (
+                            <option key={c} value={c}>
+                              {c}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="text-sm text-gray-600">
+                        {costEur !== null && <span>Cost ≈ {costEur.toFixed(2)} EUR</span>}
+                        {sellEur !== null && costEur !== null && (
+                          <span className="ml-3">
+                            Margin:{" "}
+                            <span
+                              className={`font-semibold ${
+                                marginEur !== null && marginEur < 0 ? "text-red-600" : "text-green-700"
+                              }`}
+                            >
+                              {marginEur !== null ? `${marginEur >= 0 ? "+" : ""}${marginEur.toFixed(2)} EUR` : "—"}
+                              {marginPct !== null ? ` (${marginPct.toFixed(0)}%)` : ""}
+                            </span>
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    </>
                   )}
                 </div>
               );
             })}
+          </div>
+
+          <div className="rounded-xl border border-gray-200 bg-white p-5">
+            <h2 className="text-lg font-medium">Save as quote</h2>
+            <p className="mt-1 text-sm text-gray-500">
+              {quotableCount > 0
+                ? `${quotableCount} item(s) have a sell price entered and will be saved.`
+                : "Enter a sell price on at least one item above to enable saving."}
+            </p>
+            <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <div>
+                <label className="block text-xs font-medium text-gray-500">Customer name *</label>
+                <input
+                  className="input mt-1 w-full text-sm"
+                  value={customerName}
+                  onChange={(e) => setCustomerName(e.target.value)}
+                  placeholder="e.g. Al Noor Perfumes"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500">Customer type</label>
+                <select
+                  className="input mt-1 w-full text-sm"
+                  value={customerType}
+                  onChange={(e) => setCustomerType(e.target.value)}
+                >
+                  {CUSTOMER_TYPES.map((t) => (
+                    <option key={t} value={t}>
+                      {t}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500">Region</label>
+                <input
+                  className="input mt-1 w-full text-sm"
+                  value={customerRegion}
+                  onChange={(e) => setCustomerRegion(e.target.value)}
+                  placeholder="e.g. GCC, LATAM…"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500">Notes</label>
+                <input
+                  className="input mt-1 w-full text-sm"
+                  value={quoteNotes}
+                  onChange={(e) => setQuoteNotes(e.target.value)}
+                  placeholder="Optional"
+                />
+              </div>
+            </div>
+            <div className="mt-4 flex items-center gap-3">
+              <button
+                onClick={handleSaveQuote}
+                disabled={savingQuote || quotableCount === 0}
+                className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-700 disabled:opacity-50"
+              >
+                {savingQuote ? "Saving…" : "Save as quote"}
+              </button>
+              {saveQuoteError && <p className="text-sm text-red-600">{saveQuoteError}</p>}
+              {savedQuoteId !== null && (
+                <p className="text-sm text-green-700">
+                  Saved.{" "}
+                  <Link href="/quotes" className="underline">
+                    View in sales pipeline →
+                  </Link>
+                </p>
+              )}
+            </div>
           </div>
         </section>
       )}

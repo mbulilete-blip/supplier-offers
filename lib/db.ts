@@ -74,7 +74,42 @@ export function ensureSchema(): Promise<void> {
         -- quote it as "500 (neg.)", "2-3 cartons", "no minimum", etc. - widen
         -- to free text, same treatment as lead_time_days above (a no-op once
         -- the column is already TEXT).
-        ALTER TABLE offers ALTER COLUMN moq TYPE TEXT USING moq::text;`
+        ALTER TABLE offers ALTER COLUMN moq TYPE TEXT USING moq::text;
+        -- Sales side: a quote is a customer-facing offer built from one or
+        -- more sourced items (each optionally tied back to the supplier
+        -- offer it was costed from). Kept as its own table rather than
+        -- reusing "offers" since the direction, parties, and fields (sell
+        -- price, margin, deal status) are fundamentally different.
+        CREATE TABLE IF NOT EXISTS quotes (
+          id SERIAL PRIMARY KEY,
+          customer_name TEXT NOT NULL,
+          customer_type TEXT,
+          region TEXT,
+          status TEXT NOT NULL DEFAULT 'quoted',
+          notes TEXT,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
+        CREATE TABLE IF NOT EXISTS quote_items (
+          id SERIAL PRIMARY KEY,
+          quote_id INTEGER NOT NULL REFERENCES quotes(id) ON DELETE CASCADE,
+          -- Soft reference to the sourced offer this line was costed from.
+          -- ON DELETE SET NULL so deleting/editing an old offer later never
+          -- breaks a saved quote - cost_price/cost_currency below are
+          -- snapshotted at save time precisely so the quote stays accurate
+          -- even if the underlying offer changes or disappears.
+          offer_id INTEGER REFERENCES offers(id) ON DELETE SET NULL,
+          brand TEXT,
+          product TEXT NOT NULL,
+          sku TEXT,
+          qty NUMERIC,
+          supplier TEXT,
+          cost_price NUMERIC,
+          cost_currency TEXT,
+          sell_price NUMERIC,
+          sell_currency TEXT,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        );`
       )
       .then(() => undefined);
   }
@@ -752,5 +787,237 @@ export async function updateOffer(id: number, input: Partial<OfferInput>): Promi
 export async function deleteOffer(id: number): Promise<boolean> {
   await ensureSchema();
   const { rowCount } = await getPool().query(`DELETE FROM offers WHERE id = $1;`, [id]);
+  return (rowCount ?? 0) > 0;
+}
+
+// ---------------------------------------------------------------------------
+// Sales side: quotes built from the Sourcing Inquiry flow. A quote is a
+// customer-facing offer with one or more line items, each snapshotting the
+// sourced cost (supplier/price/currency, optionally tied back to the offer
+// it came from) alongside the proposed sell price, so margin stays visible
+// and accurate even as the underlying supplier offers keep changing.
+// ---------------------------------------------------------------------------
+
+export const QUOTE_STATUSES = ["quoted", "won", "lost", "shipped"] as const;
+export type QuoteStatus = (typeof QUOTE_STATUSES)[number];
+
+export type QuoteItemInput = {
+  offerId?: number | null;
+  brand?: string | null;
+  product: string;
+  sku?: string | null;
+  qty?: number | null;
+  supplier?: string | null;
+  costPrice?: number | null;
+  costCurrency?: string | null;
+  sellPrice?: number | null;
+  sellCurrency?: string | null;
+};
+
+export type QuoteItem = {
+  id: number;
+  offerId: number | null;
+  brand: string | null;
+  product: string;
+  sku: string | null;
+  qty: number | null;
+  supplier: string | null;
+  costPrice: number | null;
+  costCurrency: string | null;
+  sellPrice: number | null;
+  sellCurrency: string | null;
+  createdAt: string;
+};
+
+export type QuoteInput = {
+  customerName: string;
+  customerType?: string | null;
+  region?: string | null;
+  status?: QuoteStatus;
+  notes?: string | null;
+  items: QuoteItemInput[];
+};
+
+export type Quote = {
+  id: number;
+  customerName: string;
+  customerType: string | null;
+  region: string | null;
+  status: QuoteStatus;
+  notes: string | null;
+  createdAt: string;
+  updatedAt: string;
+  items: QuoteItem[];
+};
+
+export type QuoteSummary = {
+  id: number;
+  customerName: string;
+  customerType: string | null;
+  region: string | null;
+  status: QuoteStatus;
+  itemCount: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function mapQuoteItemRow(row: any): QuoteItem {
+  return {
+    id: row.id,
+    offerId: row.offer_id,
+    brand: row.brand,
+    product: row.product,
+    sku: row.sku,
+    qty: row.qty === null ? null : Number(row.qty),
+    supplier: row.supplier,
+    costPrice: row.cost_price === null ? null : Number(row.cost_price),
+    costCurrency: row.cost_currency,
+    sellPrice: row.sell_price === null ? null : Number(row.sell_price),
+    sellCurrency: row.sell_currency,
+    createdAt: new Date(row.created_at).toISOString(),
+  };
+}
+
+export async function createQuote(input: QuoteInput): Promise<Quote> {
+  await ensureSchema();
+  const pool = getPool();
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows: quoteRows } = await client.query(
+      `INSERT INTO quotes (customer_name, customer_type, region, status, notes)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING *;`,
+      [
+        input.customerName.trim(),
+        input.customerType?.trim() || null,
+        input.region?.trim() || null,
+        input.status ?? "quoted",
+        input.notes?.trim() || null,
+      ]
+    );
+    const quoteId = quoteRows[0].id;
+
+    const items: QuoteItem[] = [];
+    for (const item of input.items) {
+      const { rows: itemRows } = await client.query(
+        `INSERT INTO quote_items
+           (quote_id, offer_id, brand, product, sku, qty, supplier, cost_price, cost_currency, sell_price, sell_currency)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+         RETURNING *;`,
+        [
+          quoteId,
+          item.offerId ?? null,
+          item.brand ?? null,
+          item.product,
+          item.sku ?? null,
+          item.qty ?? null,
+          item.supplier ?? null,
+          item.costPrice ?? null,
+          item.costCurrency ?? null,
+          item.sellPrice ?? null,
+          item.sellCurrency ?? null,
+        ]
+      );
+      items.push(mapQuoteItemRow(itemRows[0]));
+    }
+    await client.query("COMMIT");
+
+    const q = quoteRows[0];
+    return {
+      id: q.id,
+      customerName: q.customer_name,
+      customerType: q.customer_type,
+      region: q.region,
+      status: q.status,
+      notes: q.notes,
+      createdAt: new Date(q.created_at).toISOString(),
+      updatedAt: new Date(q.updated_at).toISOString(),
+      items,
+    };
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+export async function listQuotes(): Promise<QuoteSummary[]> {
+  await ensureSchema();
+  const { rows } = await getPool().query(
+    `SELECT q.*, COUNT(i.id)::int AS item_count
+     FROM quotes q
+     LEFT JOIN quote_items i ON i.quote_id = q.id
+     GROUP BY q.id
+     ORDER BY q.created_at DESC;`
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    customerName: r.customer_name,
+    customerType: r.customer_type,
+    region: r.region,
+    status: r.status,
+    itemCount: r.item_count,
+    createdAt: new Date(r.created_at).toISOString(),
+    updatedAt: new Date(r.updated_at).toISOString(),
+  }));
+}
+
+export async function getQuote(id: number): Promise<Quote | null> {
+  await ensureSchema();
+  const pool = getPool();
+  const { rows: quoteRows } = await pool.query(`SELECT * FROM quotes WHERE id = $1;`, [id]);
+  if (quoteRows.length === 0) return null;
+  const { rows: itemRows } = await pool.query(
+    `SELECT * FROM quote_items WHERE quote_id = $1 ORDER BY id ASC;`,
+    [id]
+  );
+  const q = quoteRows[0];
+  return {
+    id: q.id,
+    customerName: q.customer_name,
+    customerType: q.customer_type,
+    region: q.region,
+    status: q.status,
+    notes: q.notes,
+    createdAt: new Date(q.created_at).toISOString(),
+    updatedAt: new Date(q.updated_at).toISOString(),
+    items: itemRows.map(mapQuoteItemRow),
+  };
+}
+
+export async function updateQuote(
+  id: number,
+  input: Partial<Pick<QuoteInput, "status" | "notes" | "customerName" | "customerType" | "region">>
+): Promise<Quote | null> {
+  await ensureSchema();
+  const pool = getPool();
+  const existing = await pool.query(`SELECT * FROM quotes WHERE id = $1;`, [id]);
+  if (existing.rows.length === 0) return null;
+  const current = existing.rows[0];
+
+  const merged = {
+    customerName: input.customerName ?? current.customer_name,
+    customerType: input.customerType !== undefined ? input.customerType : current.customer_type,
+    region: input.region !== undefined ? input.region : current.region,
+    status: input.status ?? current.status,
+    notes: input.notes !== undefined ? input.notes : current.notes,
+  };
+
+  await pool.query(
+    `UPDATE quotes SET
+       customer_name = $1, customer_type = $2, region = $3, status = $4, notes = $5, updated_at = now()
+     WHERE id = $6;`,
+    [merged.customerName, merged.customerType, merged.region, merged.status, merged.notes, id]
+  );
+
+  return getQuote(id);
+}
+
+export async function deleteQuote(id: number): Promise<boolean> {
+  await ensureSchema();
+  const { rowCount } = await getPool().query(`DELETE FROM quotes WHERE id = $1;`, [id]);
   return (rowCount ?? 0) > 0;
 }
