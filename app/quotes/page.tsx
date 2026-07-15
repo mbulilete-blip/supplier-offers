@@ -42,6 +42,74 @@ type QuoteItem = {
 
 type Quote = QuoteSummary & { notes: string | null; items: QuoteItem[] };
 
+// Client-facing quote export - deliberately excludes supplier name, cost
+// price/currency, and margin: those are internal sourcing details and must
+// never appear in a document handed to the customer. Only product, qty,
+// and the proposed sell price/currency go out, matching what the customer
+// was actually quoted.
+async function downloadQuoteXlsx(quote: Quote) {
+  const XLSX = await import("xlsx");
+
+  const rows: (string | number)[][] = [];
+  rows.push([`Quote for ${quote.customerName}`]);
+  const infoParts = [
+    quote.customerType ? `Type: ${quote.customerType}` : null,
+    quote.region ? `Region: ${quote.region}` : null,
+    `Date: ${new Date(quote.createdAt).toLocaleDateString()}`,
+  ].filter(Boolean) as string[];
+  rows.push([infoParts.join("   ")]);
+  rows.push([]);
+  rows.push(["Product", "Brand", "SKU", "Qty", "Unit price", "Currency", "Line total"]);
+
+  const totalsByCurrency: Record<string, number> = {};
+  for (const it of quote.items) {
+    const qty = it.qty ?? 1;
+    const currency = it.sellCurrency ?? "";
+    const lineTotal = it.sellPrice !== null ? it.sellPrice * qty : null;
+    if (lineTotal !== null && currency) {
+      totalsByCurrency[currency] = (totalsByCurrency[currency] ?? 0) + lineTotal;
+    }
+    rows.push([
+      it.product,
+      it.brand ?? "",
+      it.sku ?? "",
+      it.qty ?? "",
+      it.sellPrice ?? "",
+      currency,
+      lineTotal !== null ? Number(lineTotal.toFixed(2)) : "",
+    ]);
+  }
+
+  const currencyTotals = Object.entries(totalsByCurrency);
+  if (currencyTotals.length > 0) {
+    rows.push([]);
+    for (const [currency, total] of currencyTotals) {
+      rows.push(["", "", "", "", "", `Total (${currency})`, Number(total.toFixed(2))]);
+    }
+  }
+
+  if (quote.notes) {
+    rows.push([]);
+    rows.push([`Notes: ${quote.notes}`]);
+  }
+
+  const sheet = XLSX.utils.aoa_to_sheet(rows);
+  sheet["!cols"] = [
+    { wch: 32 }, // Product
+    { wch: 18 }, // Brand
+    { wch: 16 }, // SKU
+    { wch: 8 }, // Qty
+    { wch: 12 }, // Unit price
+    { wch: 10 }, // Currency
+    { wch: 14 }, // Line total
+  ];
+
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, sheet, "Quote");
+  const safeName = quote.customerName.trim().replace(/[^a-z0-9]+/gi, "-").toLowerCase() || "customer";
+  XLSX.writeFile(workbook, `quote-${safeName}-${new Date(quote.createdAt).toISOString().slice(0, 10)}.xlsx`);
+}
+
 export default function QuotesPage() {
   const [quotes, setQuotes] = useState<QuoteSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -184,24 +252,33 @@ export default function QuotesPage() {
                       <p className="text-sm text-gray-400">Loading…</p>
                     ) : detail ? (
                       <>
-                        {totals && (
-                          <div className="mb-3 flex flex-wrap gap-4 text-sm text-gray-600">
-                            <span>
-                              Cost ≈ <strong className="text-gray-900">{totals.costEur.toFixed(2)} EUR</strong>
-                            </span>
-                            <span>
-                              Sell ≈ <strong className="text-gray-900">{totals.sellEur.toFixed(2)} EUR</strong>
-                            </span>
-                            <span>
-                              Margin:{" "}
-                              <strong className={totals.marginEur < 0 ? "text-red-600" : "text-green-700"}>
-                                {totals.marginEur >= 0 ? "+" : ""}
-                                {totals.marginEur.toFixed(2)} EUR
-                                {totals.marginPct !== null ? ` (${totals.marginPct.toFixed(0)}%)` : ""}
-                              </strong>
-                            </span>
-                          </div>
-                        )}
+                        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                          {totals && (
+                            <div className="flex flex-wrap gap-4 text-sm text-gray-600">
+                              <span>
+                                Cost ≈ <strong className="text-gray-900">{totals.costEur.toFixed(2)} EUR</strong>
+                              </span>
+                              <span>
+                                Sell ≈ <strong className="text-gray-900">{totals.sellEur.toFixed(2)} EUR</strong>
+                              </span>
+                              <span>
+                                Margin:{" "}
+                                <strong className={totals.marginEur < 0 ? "text-red-600" : "text-green-700"}>
+                                  {totals.marginEur >= 0 ? "+" : ""}
+                                  {totals.marginEur.toFixed(2)} EUR
+                                  {totals.marginPct !== null ? ` (${totals.marginPct.toFixed(0)}%)` : ""}
+                                </strong>
+                              </span>
+                            </div>
+                          )}
+                          <button
+                            onClick={() => downloadQuoteXlsx(detail)}
+                            title="Downloads a customer-facing quote: product, qty, and sell price only - no supplier, cost, or margin."
+                            className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:border-gray-400"
+                          >
+                            Download quote (.xlsx)
+                          </button>
+                        </div>
                         {detail.notes && <p className="mb-3 text-sm text-gray-500">Notes: {detail.notes}</p>}
                         <div className="overflow-x-auto">
                           <table className="w-full text-left text-sm">
