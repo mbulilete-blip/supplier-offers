@@ -27,6 +27,12 @@ export type OfferInput = {
   // "In Stock" or "Preorder" actually groups things consistently.
   availability?: string | null;
   notes?: string | null;
+  // Link to the original uploaded price-list file this offer came from (e.g.
+  // a Dropbox/Drive share link), so the source document can be pulled up
+  // later from any offer detail view instead of hunting through downloads.
+  // Applied per-batch at import time (see BuildOptions.sourceFileUrl in
+  // lib/smartImport.ts) but editable per-offer afterward too.
+  sourceFileUrl?: string | null;
 };
 
 export type Offer = {
@@ -46,6 +52,7 @@ export type Offer = {
   marketOrigin: string | null;
   availability: string | null;
   notes: string | null;
+  sourceFileUrl: string | null;
   createdAt: string;
 };
 
@@ -65,4 +72,5 @@ export const CSV_HEADERS = [
   "marketOrigin",
   "availability",
   "notes",
+  "sourceFileUrl",
 ] as const;

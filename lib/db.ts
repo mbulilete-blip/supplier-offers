@@ -75,6 +75,12 @@ export function ensureSchema(): Promise<void> {
         -- to free text, same treatment as lead_time_days above (a no-op once
         -- the column is already TEXT).
         ALTER TABLE offers ALTER COLUMN moq TYPE TEXT USING moq::text;
+        -- Link to the original uploaded price-list file this batch of offers
+        -- came from (e.g. a Dropbox/Drive share link), so the source
+        -- document can be pulled up later from an offer's detail view
+        -- instead of hunting through downloads. Set per-import-batch, but
+        -- editable per-offer afterward like any other field.
+        ALTER TABLE offers ADD COLUMN IF NOT EXISTS source_file_url TEXT;
         -- Sales side: a quote is a customer-facing offer built from one or
         -- more sourced items (each optionally tied back to the supplier
         -- offer it was costed from). Kept as its own table rather than
@@ -135,6 +141,7 @@ function mapRow(row: any): Offer {
     marketOrigin: row.market_origin,
     availability: row.availability,
     notes: row.notes,
+    sourceFileUrl: row.source_file_url,
     createdAt: new Date(row.created_at).toISOString(),
   };
 }
@@ -576,8 +583,8 @@ export async function createOffer(input: OfferInput): Promise<Offer> {
   await ensureSchema();
   const { rows } = await getPool().query(
     `INSERT INTO offers
-       (supplier, brand, product, sku, price, currency, rrp, moq, lead_time_days, payment_terms, region, incoterm, market_origin, availability, notes)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+       (supplier, brand, product, sku, price, currency, rrp, moq, lead_time_days, payment_terms, region, incoterm, market_origin, availability, notes, source_file_url)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
      RETURNING *;`,
     [
       input.supplier,
@@ -595,6 +602,7 @@ export async function createOffer(input: OfferInput): Promise<Offer> {
       input.marketOrigin ?? null,
       input.availability ?? null,
       input.notes ?? null,
+      input.sourceFileUrl ?? null,
     ]
   );
   return mapRow(rows[0]);
@@ -605,7 +613,7 @@ export async function createOffer(input: OfferInput): Promise<Offer> {
 // (tens of thousands of rows) finish inside a serverless function's time
 // limit instead of timing out.
 const IMPORT_BATCH_SIZE = 1000;
-const COLS_PER_ROW = 15;
+const COLS_PER_ROW = 16;
 
 export async function createOffers(inputs: OfferInput[]): Promise<number> {
   await ensureSchema();
@@ -636,13 +644,14 @@ export async function createOffers(inputs: OfferInput[]): Promise<number> {
         input.incoterm ?? null,
         input.marketOrigin ?? null,
         input.availability ?? null,
-        input.notes ?? null
+        input.notes ?? null,
+        input.sourceFileUrl ?? null
       );
     });
 
     await pool.query(
       `INSERT INTO offers
-         (supplier, brand, product, sku, price, currency, rrp, moq, lead_time_days, payment_terms, region, incoterm, market_origin, availability, notes)
+         (supplier, brand, product, sku, price, currency, rrp, moq, lead_time_days, payment_terms, region, incoterm, market_origin, availability, notes, source_file_url)
        VALUES ${placeholders.join(",")};`,
       values
     );
@@ -753,14 +762,15 @@ export async function updateOffer(id: number, input: Partial<OfferInput>): Promi
     marketOrigin: input.marketOrigin !== undefined ? input.marketOrigin : current.marketOrigin,
     availability: input.availability !== undefined ? input.availability : current.availability,
     notes: input.notes !== undefined ? input.notes : current.notes,
+    sourceFileUrl: input.sourceFileUrl !== undefined ? input.sourceFileUrl : current.sourceFileUrl,
   };
 
   const { rows } = await pool.query(
     `UPDATE offers SET
        supplier = $1, brand = $2, product = $3, sku = $4, price = $5, currency = $6,
        rrp = $7, moq = $8, lead_time_days = $9, payment_terms = $10, region = $11,
-       incoterm = $12, market_origin = $13, availability = $14, notes = $15, updated_at = now()
-     WHERE id = $16
+       incoterm = $12, market_origin = $13, availability = $14, notes = $15, source_file_url = $16, updated_at = now()
+     WHERE id = $17
      RETURNING *;`,
     [
       merged.supplier,
@@ -778,6 +788,7 @@ export async function updateOffer(id: number, input: Partial<OfferInput>): Promi
       merged.marketOrigin ?? null,
       merged.availability ?? null,
       merged.notes ?? null,
+      merged.sourceFileUrl ?? null,
       id,
     ]
   );

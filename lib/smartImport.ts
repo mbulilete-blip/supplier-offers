@@ -327,6 +327,12 @@ export type BuildOptions = {
   // varies product-to-product within one list, so a per-row column value
   // always wins and this only fills in rows that have none.
   defaultAvailability?: string;
+  // Link to the original uploaded file (e.g. a Dropbox/Drive share link),
+  // stamped onto every offer built from this batch so the source document
+  // can be opened later from any offer's detail view. No column ever
+  // detects this from the sheet itself - it's confirmed once per batch, like
+  // supplierOverride.
+  sourceFileUrl?: string;
 };
 
 // Canonicalizes common supplier phrasings into one of four buckets so
@@ -380,6 +386,9 @@ export function buildOffersFromMapping(
   const extraCols = byRole("extra");
 
   const isWideFormat = priceCols.length > 1 && !supplierCol;
+
+  // Batch-level, not per-row - the whole file came from one place.
+  const sourceFileUrl = str(options.sourceFileUrl) ?? null;
 
   const dataRows = rows.slice(headerRowIndex + 1);
 
@@ -454,6 +463,7 @@ export function buildOffersFromMapping(
           marketOrigin,
           availability,
           notes,
+          sourceFileUrl,
         });
       }
     } else {
@@ -496,6 +506,7 @@ export function buildOffersFromMapping(
         marketOrigin,
         availability,
         notes,
+        sourceFileUrl,
       });
     }
   });
@@ -532,6 +543,7 @@ export function offersToCsv(offers: OfferInput[]): string {
         o.marketOrigin ?? "",
         o.availability ?? "",
         o.notes ?? "",
+        o.sourceFileUrl ?? "",
       ]
         .map(escape)
         .join(",")

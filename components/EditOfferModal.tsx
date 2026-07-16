@@ -35,6 +35,10 @@ const FIELDS: { key: keyof OfferInput; label: string; type?: string; inputMode?:
   { key: "marketOrigin", label: "Market origin" },
   { key: "availability", label: "Availability" },
   { key: "notes", label: "Notes" },
+  // Link to the original uploaded price-list file this offer came from (set
+  // per-batch on Check New Prices, but fixable here per-offer too). Rendered
+  // with an "Open ↗" link alongside the input below whenever it has a value.
+  { key: "sourceFileUrl", label: "Source file link" },
 ];
 
 export default function EditOfferModal({ offer, onClose, onSaved }: Props) {
@@ -84,6 +88,7 @@ export default function EditOfferModal({ offer, onClose, onSaved }: Props) {
       marketOrigin: form.marketOrigin.trim() || null,
       availability: form.availability.trim() || null,
       notes: form.notes.trim() || null,
+      sourceFileUrl: form.sourceFileUrl.trim() || null,
     };
 
     setSaving(true);
@@ -120,18 +125,38 @@ export default function EditOfferModal({ offer, onClose, onSaved }: Props) {
         </p>
 
         <div className="grid grid-cols-2 gap-3">
-          {FIELDS.map((f) => (
-            <label key={f.key} className="col-span-1 block text-xs text-gray-600">
-              {f.label}
-              <input
-                className="input mt-1 w-full"
-                type={f.type ?? "text"}
-                inputMode={f.inputMode}
-                value={form[f.key] ?? ""}
-                onChange={(e) => handleChange(f.key, e.target.value)}
-              />
-            </label>
-          ))}
+          {FIELDS.map((f) => {
+            const value = form[f.key] ?? "";
+            const isSourceLink = f.key === "sourceFileUrl";
+            return (
+              <label
+                key={f.key}
+                className={`block text-xs text-gray-600 ${isSourceLink ? "col-span-2" : "col-span-1"}`}
+              >
+                <span className="flex items-center justify-between gap-2">
+                  {f.label}
+                  {isSourceLink && value.trim() !== "" && (
+                    <a
+                      href={value.trim()}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="font-medium text-blue-600 hover:underline"
+                    >
+                      Open ↗
+                    </a>
+                  )}
+                </span>
+                <input
+                  className="input mt-1 w-full"
+                  type={f.type ?? "text"}
+                  inputMode={f.inputMode}
+                  value={value}
+                  onChange={(e) => handleChange(f.key, e.target.value)}
+                  placeholder={isSourceLink ? "e.g. https://www.dropbox.com/s/..." : undefined}
+                />
+              </label>
+            );
+          })}
         </div>
 
         {error && <p className="mt-3 text-sm text-red-600">{error}</p>}

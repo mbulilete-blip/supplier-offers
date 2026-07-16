@@ -235,6 +235,13 @@ export default function ImportCheckPage() {
     "Unknown"
   );
 
+  // Optional link to the original file itself (e.g. a Dropbox/Drive share
+  // link) so it can be pulled up later from any offer's detail view. Applies
+  // to every offer from this batch, same "confirm once" treatment as
+  // supplier/Incoterm/EU-origin above - not detected from the sheet, always
+  // typed in by the user.
+  const [sourceFileUrl, setSourceFileUrl] = useState("");
+
   const [comparing, setComparing] = useState(false);
   const [result, setResult] = useState<CompareResult | null>(null);
   const [importing, setImporting] = useState(false);
@@ -246,6 +253,9 @@ export default function ImportCheckPage() {
     setResult(null);
     setImported(null);
     setFileName(file.name);
+    // A new file needs its own link (or none) - don't carry over the
+    // previous upload's source link.
+    setSourceFileUrl("");
     try {
       const grid = await readFileAsRows(file);
       if (grid.length === 0) {
@@ -329,6 +339,7 @@ export default function ImportCheckPage() {
       defaultLeadTimeDays: leadTimeTrimmed === "" ? undefined : leadTimeTrimmed,
       defaultMoq: moqTrimmed === "" ? undefined : moqTrimmed,
       defaultAvailability: defaultAvailability === "Unknown" ? undefined : defaultAvailability,
+      sourceFileUrl: sourceFileUrl.trim() || undefined,
     });
   }, [
     rows,
@@ -343,6 +354,7 @@ export default function ImportCheckPage() {
     defaultLeadTimeDays,
     defaultMoq,
     defaultAvailability,
+    sourceFileUrl,
   ]);
 
   const handleCompare = async () => {
@@ -614,6 +626,24 @@ export default function ImportCheckPage() {
             Lead time, MOQ, and availability defaults only fill in rows that don&apos;t already have their
             own value — unlike supplier, Incoterm, and EU origin above, which apply to every row.
           </p>
+
+          <div className="border-t border-gray-100 pt-4">
+            <label className="block text-xs font-medium text-gray-700">
+              Source file link <span className="font-normal text-gray-400">— optional</span>
+            </label>
+            <p className="mt-1 text-xs text-gray-500">
+              Paste a Dropbox/Drive (or any) share link to this exact file. It&apos;s saved on every
+              offer imported from this upload, so you can open the original file later from anywhere —
+              click the offer in Dashboard, Compare, Matrix, History, or Sourcing Inquiry.
+            </p>
+            <input
+              className="input mt-2 w-full max-w-md text-sm"
+              type="url"
+              value={sourceFileUrl}
+              onChange={(e) => setSourceFileUrl(e.target.value)}
+              placeholder="e.g. https://www.dropbox.com/s/..."
+            />
+          </div>
 
           {built && (
             <div className="rounded-lg bg-gray-50 p-4 text-sm">
