@@ -42,16 +42,17 @@ type QuoteItem = {
 
 type Quote = QuoteSummary & { notes: string | null; items: QuoteItem[] };
 
-// Client-facing quote export - deliberately excludes supplier name, cost
-// price/currency, and margin: those are internal sourcing details and must
-// never appear in a document handed to the customer. Only product, qty,
-// and the proposed sell price/currency go out, matching what the customer
-// was actually quoted.
-async function downloadQuoteXlsx(quote: Quote) {
+// Internal-use quote export - this file is for Maria/the team, not the
+// customer, so it includes full sourcing detail: supplier, cost
+// price/currency, and margin (in EUR, converted via the same rates used
+// on-screen) alongside the sell price quoted to the customer. Never hand
+// this file to a customer directly - it exposes exactly who the supplier
+// is and what margin is being made.
+async function downloadQuoteXlsx(quote: Quote, eurRates: EurRates) {
   const XLSX = await import("xlsx");
 
   const rows: (string | number)[][] = [];
-  rows.push([`Quote for ${quote.customerName}`]);
+  rows.push([`Quote for ${quote.customerName} (internal - includes supplier/cost/margin)`]);
   const infoParts = [
     quote.customerType ? `Type: ${quote.customerType}` : null,
     quote.region ? `Region: ${quote.region}` : null,
@@ -59,9 +60,22 @@ async function downloadQuoteXlsx(quote: Quote) {
   ].filter(Boolean) as string[];
   rows.push([infoParts.join("   ")]);
   rows.push([]);
-  rows.push(["Product", "Brand", "SKU", "Qty", "Unit price", "Currency", "Line total"]);
+  rows.push([
+    "Product",
+    "Brand",
+    "SKU",
+    "Qty",
+    "Supplier",
+    "Cost price",
+    "Cost currency",
+    "Sell price",
+    "Sell currency",
+    "Line total (sell)",
+    "Margin (EUR)",
+  ]);
 
   const totalsByCurrency: Record<string, number> = {};
+  let marginEurTotal = 0;
   for (const it of quote.items) {
     const qty = it.qty ?? 1;
     const currency = it.sellCurrency ?? "";
@@ -69,23 +83,31 @@ async function downloadQuoteXlsx(quote: Quote) {
     if (lineTotal !== null && currency) {
       totalsByCurrency[currency] = (totalsByCurrency[currency] ?? 0) + lineTotal;
     }
+    const costEur = it.costPrice !== null ? toEur(it.costPrice, it.costCurrency, eurRates) * qty : null;
+    const sellEur = it.sellPrice !== null ? toEur(it.sellPrice, it.sellCurrency, eurRates) * qty : null;
+    const marginEur = costEur !== null && sellEur !== null ? sellEur - costEur : null;
+    if (marginEur !== null) marginEurTotal += marginEur;
+
     rows.push([
       it.product,
       it.brand ?? "",
       it.sku ?? "",
       it.qty ?? "",
+      it.supplier ?? "",
+      it.costPrice ?? "",
+      it.costCurrency ?? "",
       it.sellPrice ?? "",
       currency,
       lineTotal !== null ? Number(lineTotal.toFixed(2)) : "",
+      marginEur !== null ? Number(marginEur.toFixed(2)) : "",
     ]);
   }
 
+  rows.push([]);
+  rows.push(["", "", "", "", "", "", "", "", "", "Total margin (EUR)", Number(marginEurTotal.toFixed(2))]);
   const currencyTotals = Object.entries(totalsByCurrency);
-  if (currencyTotals.length > 0) {
-    rows.push([]);
-    for (const [currency, total] of currencyTotals) {
-      rows.push(["", "", "", "", "", `Total (${currency})`, Number(total.toFixed(2))]);
-    }
+  for (const [currency, total] of currencyTotals) {
+    rows.push(["", "", "", "", "", "", "", "", "", `Total sell (${currency})`, Number(total.toFixed(2))]);
   }
 
   if (quote.notes) {
@@ -99,15 +121,19 @@ async function downloadQuoteXlsx(quote: Quote) {
     { wch: 18 }, // Brand
     { wch: 16 }, // SKU
     { wch: 8 }, // Qty
-    { wch: 12 }, // Unit price
-    { wch: 10 }, // Currency
-    { wch: 14 }, // Line total
+    { wch: 20 }, // Supplier
+    { wch: 12 }, // Cost price
+    { wch: 12 }, // Cost currency
+    { wch: 12 }, // Sell price
+    { wch: 12 }, // Sell currency
+    { wch: 16 }, // Line total
+    { wch: 14 }, // Margin
   ];
 
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, sheet, "Quote");
   const safeName = quote.customerName.trim().replace(/[^a-z0-9]+/gi, "-").toLowerCase() || "customer";
-  XLSX.writeFile(workbook, `quote-${safeName}-${new Date(quote.createdAt).toISOString().slice(0, 10)}.xlsx`);
+  XLSX.writeFile(workbook, `quote-internal-${safeName}-${new Date(quote.createdAt).toISOString().slice(0, 10)}.xlsx`);
 }
 
 export default function QuotesPage() {
@@ -272,8 +298,8 @@ export default function QuotesPage() {
                             </div>
                           )}
                           <button
-                            onClick={() => downloadQuoteXlsx(detail)}
-                            title="Downloads a customer-facing quote: product, qty, and sell price only - no supplier, cost, or margin."
+                            onClick={() => downloadQuoteXlsx(detail, eurRates)}
+                            title="Internal use only: includes supplier, cost, sell price, and margin. Do not send this file to the customer."
                             className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:border-gray-400"
                           >
                             Download quote (.xlsx)
