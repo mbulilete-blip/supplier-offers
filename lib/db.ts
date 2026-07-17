@@ -132,7 +132,28 @@ export function ensureSchema(): Promise<void> {
         ALTER TABLE quotes ADD COLUMN IF NOT EXISTS shipping_out_cost NUMERIC;
         ALTER TABLE quotes ADD COLUMN IF NOT EXISTS shipping_out_currency TEXT;
         ALTER TABLE quotes ADD COLUMN IF NOT EXISTS samples_cost NUMERIC;
-        ALTER TABLE quotes ADD COLUMN IF NOT EXISTS samples_currency TEXT;`
+        ALTER TABLE quotes ADD COLUMN IF NOT EXISTS samples_currency TEXT;
+        -- Real audit trail for offer pricing. Before this table existed,
+        -- editing a price via EditOfferModal silently overwrote the offers
+        -- row in place with no trace of what it used to be - the "History"
+        -- page only ever showed history to the extent that a *re-import*
+        -- created a brand-new offers row for the same SKU. This table
+        -- captures a snapshot every time a single offer is created or has
+        -- its price/currency/RRP changed via updateOffer, so a manual edit
+        -- is no longer a silent overwrite. Deliberately NOT populated by the
+        -- bulk createOffers() import path - each import already creates its
+        -- own new offers row, which the existing History page already
+        -- surfaces as a historical entry, so duplicating that here would
+        -- just slow down large imports for no new information.
+        CREATE TABLE IF NOT EXISTS offer_price_history (
+          id SERIAL PRIMARY KEY,
+          offer_id INTEGER NOT NULL REFERENCES offers(id) ON DELETE CASCADE,
+          price NUMERIC NOT NULL,
+          currency TEXT NOT NULL,
+          rrp NUMERIC,
+          recorded_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
+        CREATE INDEX IF NOT EXISTS offer_price_history_offer_id_idx ON offer_price_history(offer_id);`
       )
       .then(() => undefined);
   }
@@ -598,7 +619,8 @@ export async function fixNumericBrands(): Promise<{ fixed: number; brands: strin
 
 export async function createOffer(input: OfferInput): Promise<Offer> {
   await ensureSchema();
-  const { rows } = await getPool().query(
+  const pool = getPool();
+  const { rows } = await pool.query(
     `INSERT INTO offers
        (supplier, brand, product, sku, price, currency, rrp, moq, lead_time_days, payment_terms, region, incoterm, market_origin, availability, notes, source_file_url)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
@@ -622,7 +644,15 @@ export async function createOffer(input: OfferInput): Promise<Offer> {
       input.sourceFileUrl ?? null,
     ]
   );
-  return mapRow(rows[0]);
+  const offer = mapRow(rows[0]);
+  // Baseline entry for the price-history trail - see offer_price_history in
+  // ensureSchema for why this only covers single-offer creation, not bulk
+  // import.
+  await pool.query(
+    `INSERT INTO offer_price_history (offer_id, price, currency, rrp) VALUES ($1, $2, $3, $4);`,
+    [offer.id, offer.price, offer.currency, offer.rrp]
+  );
+  return offer;
 }
 
 // Insert many rows with a single multi-row INSERT statement per batch,
@@ -809,7 +839,48 @@ export async function updateOffer(id: number, input: Partial<OfferInput>): Promi
       id,
     ]
   );
-  return mapRow(rows[0]);
+  const updated = mapRow(rows[0]);
+
+  // Only log a new history entry when something price-relevant actually
+  // changed - editing, say, just the notes or MOQ on every save would
+  // otherwise flood the trail with identical price/RRP entries.
+  const priceChanged =
+    updated.price !== current.price || updated.currency !== current.currency || updated.rrp !== current.rrp;
+  if (priceChanged) {
+    await pool.query(
+      `INSERT INTO offer_price_history (offer_id, price, currency, rrp) VALUES ($1, $2, $3, $4);`,
+      [updated.id, updated.price, updated.currency, updated.rrp]
+    );
+  }
+
+  return updated;
+}
+
+export type OfferPriceHistoryEntry = {
+  id: number;
+  price: number;
+  currency: string;
+  rrp: number | null;
+  recordedAt: string;
+};
+
+// Chronological (oldest first) price/RRP trail for a single offer - see
+// offer_price_history in ensureSchema. Powers the "Price history" section in
+// EditOfferModal so a price edit is no longer a silent, unrecoverable
+// overwrite.
+export async function getOfferPriceHistory(offerId: number): Promise<OfferPriceHistoryEntry[]> {
+  await ensureSchema();
+  const { rows } = await getPool().query(
+    `SELECT * FROM offer_price_history WHERE offer_id = $1 ORDER BY recorded_at ASC, id ASC;`,
+    [offerId]
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    price: Number(r.price),
+    currency: r.currency,
+    rrp: r.rrp === null ? null : Number(r.rrp),
+    recordedAt: new Date(r.recorded_at).toISOString(),
+  }));
 }
 
 export async function deleteOffer(id: number): Promise<boolean> {

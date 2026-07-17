@@ -1,7 +1,16 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Offer, OfferInput } from "@/lib/types";
+import { formatMoney } from "@/lib/currency";
+
+type PriceHistoryEntry = {
+  id: number;
+  price: number;
+  currency: string;
+  rrp: number | null;
+  recordedAt: string;
+};
 
 type Props = {
   offer: Offer;
@@ -53,6 +62,29 @@ export default function EditOfferModal({ offer, onClose, onSaved }: Props) {
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Price history - loaded once per offer, independent of the edit form
+  // state above. null while loading, [] once fetched with no entries (true
+  // for any offer created before this feature shipped, since there's
+  // nothing to backfill from).
+  const [history, setHistory] = useState<PriceHistoryEntry[] | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setHistory(null);
+    fetch(`/api/offers/${offer.id}/history`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (!cancelled) setHistory(Array.isArray(data) ? data : []);
+      })
+      .catch(() => {
+        if (!cancelled) setHistory([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [offer.id]);
 
   const handleChange = (key: string, value: string) => {
     setForm((f) => ({ ...f, [key]: value }));
@@ -123,6 +155,64 @@ export default function EditOfferModal({ offer, onClose, onSaved }: Props) {
         <p className="mb-4 text-xs text-gray-400">
           Added {new Date(offer.createdAt).toLocaleString()} - not editable.
         </p>
+
+        <div className="mb-4 rounded-lg border border-gray-200 p-3">
+          <button
+            type="button"
+            onClick={() => setHistoryOpen((o) => !o)}
+            className="flex w-full items-center justify-between text-left"
+          >
+            <span className="text-xs font-medium uppercase text-gray-500">
+              Price history{history && history.length > 0 ? ` (${history.length})` : ""}
+            </span>
+            <span className="text-xs text-gray-400">{historyOpen ? "Hide ▲" : "Show ▼"}</span>
+          </button>
+          {historyOpen && (
+            <div className="mt-2 text-xs">
+              {history === null ? (
+                <p className="py-1 text-gray-400">Loading…</p>
+              ) : history.length === 0 ? (
+                <p className="py-1 text-gray-400">
+                  No price history recorded yet - tracking only covers changes made since this
+                  feature shipped, so older edits aren&apos;t retroactively captured.
+                </p>
+              ) : (
+                <div className="space-y-1">
+                  {[...history]
+                    .reverse()
+                    .map((h, idx, arr) => {
+                      const prev = arr[idx + 1];
+                      const delta = prev ? h.price - prev.price : null;
+                      const deltaPct = prev && prev.price !== 0 ? ((delta as number) / prev.price) * 100 : null;
+                      return (
+                        <div
+                          key={h.id}
+                          className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-100 py-1 last:border-0"
+                        >
+                          <span className="text-gray-500">{new Date(h.recordedAt).toLocaleString()}</span>
+                          <span className="font-medium text-gray-900">
+                            {formatMoney(h.price)} {h.currency}
+                            {h.rrp !== null && (
+                              <span className="ml-1 font-normal text-gray-400">
+                                (RRP {formatMoney(h.rrp)})
+                              </span>
+                            )}
+                          </span>
+                          {delta !== null && (
+                            <span className={delta === 0 ? "text-gray-400" : delta > 0 ? "text-red-600" : "text-green-700"}>
+                              {delta > 0 ? "+" : ""}
+                              {formatMoney(delta)}
+                              {deltaPct !== null ? ` (${deltaPct >= 0 ? "+" : ""}${deltaPct.toFixed(1)}%)` : ""}
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
 
         <div className="grid grid-cols-2 gap-3">
           {FIELDS.map((f) => {
