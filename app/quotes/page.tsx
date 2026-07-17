@@ -248,6 +248,84 @@ async function downloadQuoteXlsx(quote: Quote, eurRates: EurRates) {
   XLSX.writeFile(workbook, `quote-internal-${safeName}-${new Date(quote.createdAt).toISOString().slice(0, 10)}.xlsx`);
 }
 
+// Customer-safe quote export - this is the version that's actually okay to
+// hand to the customer. It deliberately omits Supplier, Cost price, Buying
+// disc. vs RRP, and Margin - anything that would expose who the item is
+// sourced from or what margin is being made - and keeps only what the
+// customer needs to see their own deal: product, qty, RRP for reference,
+// the price being quoted, how much that is off RRP, and the line/grand
+// total. Never merge this back with the internal export above.
+async function downloadQuoteXlsxCustomer(quote: Quote, eurRates: EurRates) {
+  const XLSX = await import("xlsx");
+
+  const rows: (string | number)[][] = [];
+  rows.push([`Quotation for ${quote.customerName}`]);
+  const infoParts = [
+    quote.region ? `Region: ${quote.region}` : null,
+    `Date: ${new Date(quote.createdAt).toLocaleDateString()}`,
+  ].filter(Boolean) as string[];
+  rows.push([infoParts.join("   ")]);
+  rows.push([]);
+  rows.push(["Product", "Brand", "SKU", "Qty", "RRP", "Unit price", "Discount vs RRP", "Line total"]);
+
+  const totalsByCurrency: Record<string, number> = {};
+
+  for (const it of quote.items) {
+    const qty = it.qty ?? 1;
+    const currency = it.sellCurrency ?? "";
+    const lineTotal = it.sellPrice !== null ? it.sellPrice * qty : null;
+    if (lineTotal !== null && currency) {
+      totalsByCurrency[currency] = (totalsByCurrency[currency] ?? 0) + lineTotal;
+    }
+
+    // RRP and sell price can be in different native currencies (RRP shares
+    // the cost currency, sell price is whatever was quoted) - convert both to
+    // EUR just to get an accurate percentage. The EUR figures themselves are
+    // never shown here, only the resulting "%", so nothing cost/margin-shaped
+    // leaks into this export.
+    const rrpEur = it.rrp !== null ? toEur(it.rrp, it.costCurrency, eurRates) : null;
+    const sellEur = it.sellPrice !== null ? toEur(it.sellPrice, it.sellCurrency, eurRates) : null;
+    const sellingDiscPct = rrpEur && rrpEur > 0 && sellEur !== null ? ((rrpEur - sellEur) / rrpEur) * 100 : null;
+
+    rows.push([
+      it.product,
+      it.brand ?? "",
+      it.sku ?? "",
+      it.qty ?? "",
+      it.rrp !== null ? `${formatMoney(it.rrp)} ${it.costCurrency ?? ""}`.trim() : "",
+      it.sellPrice !== null ? `${formatMoney(it.sellPrice)} ${currency}`.trim() : "",
+      sellingDiscPct !== null ? `${sellingDiscPct.toFixed(1)}%` : "",
+      lineTotal !== null ? `${formatMoney(lineTotal)} ${currency}`.trim() : "",
+    ]);
+  }
+
+  rows.push([]);
+  const currencyTotals = Object.entries(totalsByCurrency);
+  for (const [currency, total] of currencyTotals) {
+    const r: (string | number)[] = new Array(6).fill("");
+    r.push(`Total (${currency})`);
+    r.push(`${formatMoney(total)} ${currency}`);
+    rows.push(r);
+  }
+
+  const sheet = XLSX.utils.aoa_to_sheet(rows);
+  sheet["!cols"] = [
+    { wch: 32 }, // Product
+    { wch: 18 }, // Brand
+    { wch: 16 }, // SKU
+    { wch: 8 }, // Qty
+    { wch: 16 }, // RRP
+    { wch: 16 }, // Unit price
+    { wch: 16 }, // Discount vs RRP
+    { wch: 18 }, // Line total
+  ];
+
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, sheet, "Quote");
+  const safeName = quote.customerName.trim().replace(/[^a-z0-9]+/gi, "-").toLowerCase() || "customer";
+  XLSX.writeFile(workbook, `quote-customer-${safeName}-${new Date(quote.createdAt).toISOString().slice(0, 10)}.xlsx`);
+}
+
 export default function QuotesPage() {
   const [quotes, setQuotes] = useState<QuoteSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -709,13 +787,22 @@ export default function QuotesPage() {
                               )}
                             </div>
                           )}
-                          <button
-                            onClick={() => downloadQuoteXlsx(detail, eurRates)}
-                            title="Internal use only: includes supplier, cost, sell price, and margin. Do not send this file to the customer."
-                            className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:border-gray-400"
-                          >
-                            Download quote (.xlsx)
-                          </button>
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => downloadQuoteXlsxCustomer(detail, eurRates)}
+                              title="Safe to send to the customer - no supplier or cost/margin info."
+                              className="rounded-lg border border-blue-300 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700 hover:border-blue-400"
+                            >
+                              Download customer quote (.xlsx)
+                            </button>
+                            <button
+                              onClick={() => downloadQuoteXlsx(detail, eurRates)}
+                              title="Internal use only: includes supplier, cost, sell price, and margin. Do not send this file to the customer."
+                              className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:border-gray-400"
+                            >
+                              Download internal quote (.xlsx)
+                            </button>
+                          </div>
                         </div>
                         {totals && totals.rrpEur > 0 && (
                           <div className="mb-3 flex flex-wrap gap-4 rounded-lg bg-gray-50 px-3 py-2 text-xs text-gray-600">
