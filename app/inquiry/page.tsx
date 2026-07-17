@@ -305,6 +305,7 @@ export default function InquiryPage() {
           costCurrency: costOffer.currency,
           sellPrice: sellNum,
           sellCurrency: line.sellCurrency,
+          rrp: costOffer.rrp,
         };
       })
       .filter((x): x is NonNullable<typeof x> => x !== null);

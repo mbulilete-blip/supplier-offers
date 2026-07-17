@@ -115,7 +115,24 @@ export function ensureSchema(): Promise<void> {
           sell_price NUMERIC,
           sell_currency TEXT,
           created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-        );`
+        );
+        -- RRP snapshotted from the sourced offer at save time (same
+        -- snapshot treatment as cost_price - stays accurate even if the
+        -- underlying offer's RRP is edited later). Lets a quote line show
+        -- how far below RRP both the buy and the sell sit, not just the
+        -- buy-to-sell margin.
+        ALTER TABLE quote_items ADD COLUMN IF NOT EXISTS rrp NUMERIC;
+        -- Deal-level logistics costs (not per line item - a shipment's
+        -- inbound/outbound freight and any samples sent are one lump cost
+        -- for the whole quote, not attributable to one product). Filled in
+        -- once terms firm up, so nullable and edited after the quote is
+        -- first saved from Sourcing Inquiry.
+        ALTER TABLE quotes ADD COLUMN IF NOT EXISTS shipping_in_cost NUMERIC;
+        ALTER TABLE quotes ADD COLUMN IF NOT EXISTS shipping_in_currency TEXT;
+        ALTER TABLE quotes ADD COLUMN IF NOT EXISTS shipping_out_cost NUMERIC;
+        ALTER TABLE quotes ADD COLUMN IF NOT EXISTS shipping_out_currency TEXT;
+        ALTER TABLE quotes ADD COLUMN IF NOT EXISTS samples_cost NUMERIC;
+        ALTER TABLE quotes ADD COLUMN IF NOT EXISTS samples_currency TEXT;`
       )
       .then(() => undefined);
   }
@@ -823,6 +840,9 @@ export type QuoteItemInput = {
   costCurrency?: string | null;
   sellPrice?: number | null;
   sellCurrency?: string | null;
+  // Snapshotted from the sourced offer at save time - see the schema
+  // comment above. Null when the offer had no RRP on file.
+  rrp?: number | null;
 };
 
 export type QuoteItem = {
@@ -837,6 +857,7 @@ export type QuoteItem = {
   costCurrency: string | null;
   sellPrice: number | null;
   sellCurrency: string | null;
+  rrp: number | null;
   createdAt: string;
 };
 
@@ -847,6 +868,14 @@ export type QuoteInput = {
   status?: QuoteStatus;
   notes?: string | null;
   items: QuoteItemInput[];
+  // Deal-level logistics costs - see schema comment above. Optional/nullable
+  // since these are usually only known after the initial quote is saved.
+  shippingInCost?: number | null;
+  shippingInCurrency?: string | null;
+  shippingOutCost?: number | null;
+  shippingOutCurrency?: string | null;
+  samplesCost?: number | null;
+  samplesCurrency?: string | null;
 };
 
 export type Quote = {
@@ -859,6 +888,12 @@ export type Quote = {
   createdAt: string;
   updatedAt: string;
   items: QuoteItem[];
+  shippingInCost: number | null;
+  shippingInCurrency: string | null;
+  shippingOutCost: number | null;
+  shippingOutCurrency: string | null;
+  samplesCost: number | null;
+  samplesCurrency: string | null;
 };
 
 export type QuoteSummary = {
@@ -886,7 +921,30 @@ function mapQuoteItemRow(row: any): QuoteItem {
     costCurrency: row.cost_currency,
     sellPrice: row.sell_price === null ? null : Number(row.sell_price),
     sellCurrency: row.sell_currency,
+    rrp: row.rrp === null ? null : Number(row.rrp),
     createdAt: new Date(row.created_at).toISOString(),
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function mapQuoteRow(q: any, items: QuoteItem[]): Quote {
+  return {
+    id: q.id,
+    customerName: q.customer_name,
+    customerType: q.customer_type,
+    region: q.region,
+    status: q.status,
+    notes: q.notes,
+    createdAt: new Date(q.created_at).toISOString(),
+    updatedAt: new Date(q.updated_at).toISOString(),
+    items,
+    shippingInCost: q.shipping_in_cost === null || q.shipping_in_cost === undefined ? null : Number(q.shipping_in_cost),
+    shippingInCurrency: q.shipping_in_currency ?? null,
+    shippingOutCost:
+      q.shipping_out_cost === null || q.shipping_out_cost === undefined ? null : Number(q.shipping_out_cost),
+    shippingOutCurrency: q.shipping_out_currency ?? null,
+    samplesCost: q.samples_cost === null || q.samples_cost === undefined ? null : Number(q.samples_cost),
+    samplesCurrency: q.samples_currency ?? null,
   };
 }
 
@@ -897,8 +955,11 @@ export async function createQuote(input: QuoteInput): Promise<Quote> {
   try {
     await client.query("BEGIN");
     const { rows: quoteRows } = await client.query(
-      `INSERT INTO quotes (customer_name, customer_type, region, status, notes)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO quotes
+         (customer_name, customer_type, region, status, notes,
+          shipping_in_cost, shipping_in_currency, shipping_out_cost, shipping_out_currency,
+          samples_cost, samples_currency)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        RETURNING *;`,
       [
         input.customerName.trim(),
@@ -906,6 +967,12 @@ export async function createQuote(input: QuoteInput): Promise<Quote> {
         input.region?.trim() || null,
         input.status ?? "quoted",
         input.notes?.trim() || null,
+        input.shippingInCost ?? null,
+        input.shippingInCurrency ?? null,
+        input.shippingOutCost ?? null,
+        input.shippingOutCurrency ?? null,
+        input.samplesCost ?? null,
+        input.samplesCurrency ?? null,
       ]
     );
     const quoteId = quoteRows[0].id;
@@ -914,8 +981,8 @@ export async function createQuote(input: QuoteInput): Promise<Quote> {
     for (const item of input.items) {
       const { rows: itemRows } = await client.query(
         `INSERT INTO quote_items
-           (quote_id, offer_id, brand, product, sku, qty, supplier, cost_price, cost_currency, sell_price, sell_currency)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+           (quote_id, offer_id, brand, product, sku, qty, supplier, cost_price, cost_currency, sell_price, sell_currency, rrp)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
          RETURNING *;`,
         [
           quoteId,
@@ -929,24 +996,14 @@ export async function createQuote(input: QuoteInput): Promise<Quote> {
           item.costCurrency ?? null,
           item.sellPrice ?? null,
           item.sellCurrency ?? null,
+          item.rrp ?? null,
         ]
       );
       items.push(mapQuoteItemRow(itemRows[0]));
     }
     await client.query("COMMIT");
 
-    const q = quoteRows[0];
-    return {
-      id: q.id,
-      customerName: q.customer_name,
-      customerType: q.customer_type,
-      region: q.region,
-      status: q.status,
-      notes: q.notes,
-      createdAt: new Date(q.created_at).toISOString(),
-      updatedAt: new Date(q.updated_at).toISOString(),
-      items,
-    };
+    return mapQuoteRow(quoteRows[0], items);
   } catch (err) {
     await client.query("ROLLBACK");
     throw err;
@@ -986,22 +1043,27 @@ export async function getQuote(id: number): Promise<Quote | null> {
     [id]
   );
   const q = quoteRows[0];
-  return {
-    id: q.id,
-    customerName: q.customer_name,
-    customerType: q.customer_type,
-    region: q.region,
-    status: q.status,
-    notes: q.notes,
-    createdAt: new Date(q.created_at).toISOString(),
-    updatedAt: new Date(q.updated_at).toISOString(),
-    items: itemRows.map(mapQuoteItemRow),
-  };
+  return mapQuoteRow(q, itemRows.map(mapQuoteItemRow));
 }
 
 export async function updateQuote(
   id: number,
-  input: Partial<Pick<QuoteInput, "status" | "notes" | "customerName" | "customerType" | "region">>
+  input: Partial<
+    Pick<
+      QuoteInput,
+      | "status"
+      | "notes"
+      | "customerName"
+      | "customerType"
+      | "region"
+      | "shippingInCost"
+      | "shippingInCurrency"
+      | "shippingOutCost"
+      | "shippingOutCurrency"
+      | "samplesCost"
+      | "samplesCurrency"
+    >
+  >
 ): Promise<Quote | null> {
   await ensureSchema();
   const pool = getPool();
@@ -1015,13 +1077,36 @@ export async function updateQuote(
     region: input.region !== undefined ? input.region : current.region,
     status: input.status ?? current.status,
     notes: input.notes !== undefined ? input.notes : current.notes,
+    shippingInCost: input.shippingInCost !== undefined ? input.shippingInCost : current.shipping_in_cost,
+    shippingInCurrency:
+      input.shippingInCurrency !== undefined ? input.shippingInCurrency : current.shipping_in_currency,
+    shippingOutCost: input.shippingOutCost !== undefined ? input.shippingOutCost : current.shipping_out_cost,
+    shippingOutCurrency:
+      input.shippingOutCurrency !== undefined ? input.shippingOutCurrency : current.shipping_out_currency,
+    samplesCost: input.samplesCost !== undefined ? input.samplesCost : current.samples_cost,
+    samplesCurrency: input.samplesCurrency !== undefined ? input.samplesCurrency : current.samples_currency,
   };
 
   await pool.query(
     `UPDATE quotes SET
-       customer_name = $1, customer_type = $2, region = $3, status = $4, notes = $5, updated_at = now()
-     WHERE id = $6;`,
-    [merged.customerName, merged.customerType, merged.region, merged.status, merged.notes, id]
+       customer_name = $1, customer_type = $2, region = $3, status = $4, notes = $5,
+       shipping_in_cost = $6, shipping_in_currency = $7, shipping_out_cost = $8, shipping_out_currency = $9,
+       samples_cost = $10, samples_currency = $11, updated_at = now()
+     WHERE id = $12;`,
+    [
+      merged.customerName,
+      merged.customerType,
+      merged.region,
+      merged.status,
+      merged.notes,
+      merged.shippingInCost ?? null,
+      merged.shippingInCurrency ?? null,
+      merged.shippingOutCost ?? null,
+      merged.shippingOutCurrency ?? null,
+      merged.samplesCost ?? null,
+      merged.samplesCurrency ?? null,
+      id,
+    ]
   );
 
   return getQuote(id);

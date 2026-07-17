@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { EurRates, formatEur, formatMoney, toEur } from "@/lib/currency";
+import { EurRates, formatEur, formatMoney, toEur, SUPPORTED_CURRENCIES } from "@/lib/currency";
 
 type QuoteStatus = "quoted" | "won" | "lost" | "shipped";
 
@@ -37,10 +37,26 @@ type QuoteItem = {
   costCurrency: string | null;
   sellPrice: number | null;
   sellCurrency: string | null;
+  // Snapshotted from the sourced offer at save time - null when that offer
+  // had no RRP on file. Lets a line show how far below RRP both the buy and
+  // the sell sit, not just the buy-to-sell margin.
+  rrp: number | null;
   createdAt: string;
 };
 
-type Quote = QuoteSummary & { notes: string | null; items: QuoteItem[] };
+type Quote = QuoteSummary & {
+  notes: string | null;
+  items: QuoteItem[];
+  // Deal-level logistics costs - one lump sum for the whole shipment, not
+  // per line item. Nullable since usually only known after the quote is
+  // first saved.
+  shippingInCost: number | null;
+  shippingInCurrency: string | null;
+  shippingOutCost: number | null;
+  shippingOutCurrency: string | null;
+  samplesCost: number | null;
+  samplesCurrency: string | null;
+};
 
 // Internal-use quote export - this file is for Maria/the team, not the
 // customer, so it includes full sourcing detail: supplier, cost
@@ -68,14 +84,25 @@ async function downloadQuoteXlsx(quote: Quote, eurRates: EurRates) {
     "Supplier",
     "Cost price",
     "Cost currency",
+    "RRP",
+    "Buying disc. vs RRP %",
     "Sell price",
     "Sell currency",
+    "Selling disc. vs RRP %",
     "Line total (sell)",
     "Margin (EUR)",
   ]);
 
   const totalsByCurrency: Record<string, number> = {};
   let marginEurTotal = 0;
+  let costEurTotal = 0;
+  let sellEurTotal = 0;
+  // RRP-based totals only cover lines that actually have an RRP on file -
+  // mixing in RRP-less lines would silently understate the "vs RRP" figures.
+  let rrpEurTotal = 0;
+  let costEurForRrpTotal = 0;
+  let sellEurForRrpTotal = 0;
+
   for (const it of quote.items) {
     const qty = it.qty ?? 1;
     const currency = it.sellCurrency ?? "";
@@ -83,10 +110,29 @@ async function downloadQuoteXlsx(quote: Quote, eurRates: EurRates) {
     if (lineTotal !== null && currency) {
       totalsByCurrency[currency] = (totalsByCurrency[currency] ?? 0) + lineTotal;
     }
-    const costEur = it.costPrice !== null ? toEur(it.costPrice, it.costCurrency, eurRates) * qty : null;
-    const sellEur = it.sellPrice !== null ? toEur(it.sellPrice, it.sellCurrency, eurRates) * qty : null;
+    const costEurUnit = it.costPrice !== null ? toEur(it.costPrice, it.costCurrency, eurRates) : null;
+    const sellEurUnit = it.sellPrice !== null ? toEur(it.sellPrice, it.sellCurrency, eurRates) : null;
+    // RRP is snapshotted from the same offer as cost price, so it shares the
+    // cost currency - see the Matrix page's identical assumption.
+    const rrpEurUnit = it.rrp !== null ? toEur(it.rrp, it.costCurrency, eurRates) : null;
+
+    const costEur = costEurUnit !== null ? costEurUnit * qty : null;
+    const sellEur = sellEurUnit !== null ? sellEurUnit * qty : null;
     const marginEur = costEur !== null && sellEur !== null ? sellEur - costEur : null;
+    if (costEur !== null) costEurTotal += costEur;
+    if (sellEur !== null) sellEurTotal += sellEur;
     if (marginEur !== null) marginEurTotal += marginEur;
+
+    const buyingDiscPct =
+      rrpEurUnit && rrpEurUnit > 0 && costEurUnit !== null ? ((rrpEurUnit - costEurUnit) / rrpEurUnit) * 100 : null;
+    const sellingDiscPct =
+      rrpEurUnit && rrpEurUnit > 0 && sellEurUnit !== null ? ((rrpEurUnit - sellEurUnit) / rrpEurUnit) * 100 : null;
+
+    if (rrpEurUnit !== null) {
+      rrpEurTotal += rrpEurUnit * qty;
+      if (costEur !== null) costEurForRrpTotal += costEur;
+      if (sellEur !== null) sellEurForRrpTotal += sellEur;
+    }
 
     rows.push([
       it.product,
@@ -96,18 +142,82 @@ async function downloadQuoteXlsx(quote: Quote, eurRates: EurRates) {
       it.supplier ?? "",
       it.costPrice ?? "",
       it.costCurrency ?? "",
+      it.rrp ?? "",
+      buyingDiscPct !== null ? Number(buyingDiscPct.toFixed(1)) : "",
       it.sellPrice ?? "",
       currency,
+      sellingDiscPct !== null ? Number(sellingDiscPct.toFixed(1)) : "",
       lineTotal !== null ? Number(lineTotal.toFixed(2)) : "",
       marginEur !== null ? Number(marginEur.toFixed(2)) : "",
     ]);
   }
 
+  const blankRow = (label: string, value: string | number) => {
+    const r: (string | number)[] = new Array(13).fill("");
+    r.push(label);
+    r.push(value);
+    return r;
+  };
+
   rows.push([]);
-  rows.push(["", "", "", "", "", "", "", "", "", "Total margin (EUR)", Number(marginEurTotal.toFixed(2))]);
+  rows.push(blankRow("Total margin (EUR)", Number(marginEurTotal.toFixed(2))));
   const currencyTotals = Object.entries(totalsByCurrency);
   for (const [currency, total] of currencyTotals) {
-    rows.push(["", "", "", "", "", "", "", "", "", `Total sell (${currency})`, Number(total.toFixed(2))]);
+    rows.push(blankRow(`Total sell (${currency})`, Number(total.toFixed(2))));
+  }
+
+  // Expanded pricing-intelligence summary block - RRP value, discount to
+  // client, sourcing margin, and net margin after deal-level logistics costs.
+  rows.push([]);
+  rows.push(["Summary"]);
+  if (rrpEurTotal > 0) {
+    const avgDiscountToClientPct = ((rrpEurTotal - sellEurForRrpTotal) / rrpEurTotal) * 100;
+    const sourcingMarginEur = rrpEurTotal - costEurForRrpTotal;
+    const sourcingMarginPct = (sourcingMarginEur / rrpEurTotal) * 100;
+    rows.push(["Total RRP value (EUR)", Number(rrpEurTotal.toFixed(2))]);
+    rows.push(["Average discount to client vs RRP", `${avgDiscountToClientPct.toFixed(1)}%`]);
+    rows.push([
+      "Sourcing margin (RRP vs cost, EUR)",
+      `${Number(sourcingMarginEur.toFixed(2))} (${sourcingMarginPct.toFixed(1)}%)`,
+    ]);
+  }
+  rows.push([
+    "Gross margin (sell - cost, EUR)",
+    `${Number(marginEurTotal.toFixed(2))} (${sellEurTotal > 0 ? ((marginEurTotal / sellEurTotal) * 100).toFixed(1) : "0.0"}%)`,
+  ]);
+
+  const shippingInEur =
+    quote.shippingInCost !== null ? toEur(quote.shippingInCost, quote.shippingInCurrency, eurRates) : 0;
+  const shippingOutEur =
+    quote.shippingOutCost !== null ? toEur(quote.shippingOutCost, quote.shippingOutCurrency, eurRates) : 0;
+  const samplesEur = quote.samplesCost !== null ? toEur(quote.samplesCost, quote.samplesCurrency, eurRates) : 0;
+  const hasLogisticsCosts = quote.shippingInCost !== null || quote.shippingOutCost !== null || quote.samplesCost !== null;
+
+  if (hasLogisticsCosts) {
+    if (quote.shippingInCost !== null) {
+      rows.push([
+        "Shipping in (EUR)",
+        `${Number(shippingInEur.toFixed(2))} (${formatMoney(quote.shippingInCost)} ${quote.shippingInCurrency ?? ""})`,
+      ]);
+    }
+    if (quote.shippingOutCost !== null) {
+      rows.push([
+        "Shipping out (EUR)",
+        `${Number(shippingOutEur.toFixed(2))} (${formatMoney(quote.shippingOutCost)} ${quote.shippingOutCurrency ?? ""})`,
+      ]);
+    }
+    if (quote.samplesCost !== null) {
+      rows.push([
+        "Samples (EUR)",
+        `${Number(samplesEur.toFixed(2))} (${formatMoney(quote.samplesCost)} ${quote.samplesCurrency ?? ""})`,
+      ]);
+    }
+    const netMarginEur = marginEurTotal - shippingInEur - shippingOutEur - samplesEur;
+    const netMarginPct = sellEurTotal > 0 ? (netMarginEur / sellEurTotal) * 100 : null;
+    rows.push([
+      "Net margin (after shipping + samples, EUR)",
+      `${Number(netMarginEur.toFixed(2))}${netMarginPct !== null ? ` (${netMarginPct.toFixed(1)}%)` : ""}`,
+    ]);
   }
 
   if (quote.notes) {
@@ -124,8 +234,11 @@ async function downloadQuoteXlsx(quote: Quote, eurRates: EurRates) {
     { wch: 20 }, // Supplier
     { wch: 12 }, // Cost price
     { wch: 12 }, // Cost currency
+    { wch: 10 }, // RRP
+    { wch: 14 }, // Buying disc. vs RRP %
     { wch: 12 }, // Sell price
     { wch: 12 }, // Sell currency
+    { wch: 14 }, // Selling disc. vs RRP %
     { wch: 16 }, // Line total
     { wch: 14 }, // Margin
   ];
@@ -143,6 +256,30 @@ export default function QuotesPage() {
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [eurRates, setEurRates] = useState<EurRates>({ EUR: 1 });
+
+  // Editable deal-level logistics costs (shipping in/out, samples) - kept as
+  // free-text form state per quote so the amount/currency inputs don't fight
+  // the user while typing, saved explicitly via the button below.
+  type ShipForm = {
+    shippingInCost: string;
+    shippingInCurrency: string;
+    shippingOutCost: string;
+    shippingOutCurrency: string;
+    samplesCost: string;
+    samplesCurrency: string;
+  };
+  const [shipForm, setShipForm] = useState<Record<number, ShipForm>>({});
+  const [savingShipping, setSavingShipping] = useState<number | null>(null);
+  const [shipError, setShipError] = useState<Record<number, string>>({});
+
+  const shipFormFromQuote = (q: Quote): ShipForm => ({
+    shippingInCost: q.shippingInCost !== null ? String(q.shippingInCost) : "",
+    shippingInCurrency: q.shippingInCurrency ?? "EUR",
+    shippingOutCost: q.shippingOutCost !== null ? String(q.shippingOutCost) : "",
+    shippingOutCurrency: q.shippingOutCurrency ?? "EUR",
+    samplesCost: q.samplesCost !== null ? String(q.samplesCost) : "",
+    samplesCurrency: q.samplesCurrency ?? "EUR",
+  });
 
   const load = () => {
     setLoading(true);
@@ -169,10 +306,58 @@ export default function QuotesPage() {
     setLoadingDetail(true);
     try {
       const res = await fetch(`/api/quotes/${id}`);
-      const data = await res.json();
+      const data: Quote = await res.json();
       setExpanded((prev) => ({ ...prev, [id]: data }));
+      setShipForm((prev) => (prev[id] ? prev : { ...prev, [id]: shipFormFromQuote(data) }));
     } finally {
       setLoadingDetail(false);
+    }
+  };
+
+  const handleSaveShipping = async (id: number) => {
+    const form = shipForm[id];
+    if (!form) return;
+    setShipError((prev) => ({ ...prev, [id]: "" }));
+
+    const parseCost = (v: string): number | null | undefined => {
+      const t = v.trim();
+      if (t === "") return null;
+      const n = Number(t);
+      return Number.isFinite(n) ? n : undefined;
+    };
+    const shippingInCost = parseCost(form.shippingInCost);
+    const shippingOutCost = parseCost(form.shippingOutCost);
+    const samplesCost = parseCost(form.samplesCost);
+    if (shippingInCost === undefined || shippingOutCost === undefined || samplesCost === undefined) {
+      setShipError((prev) => ({ ...prev, [id]: "Enter valid numbers, or leave a field blank to clear it." }));
+      return;
+    }
+
+    setSavingShipping(id);
+    try {
+      const res = await fetch(`/api/quotes/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          shippingInCost,
+          shippingInCurrency: form.shippingInCurrency,
+          shippingOutCost,
+          shippingOutCurrency: form.shippingOutCurrency,
+          samplesCost,
+          samplesCurrency: form.samplesCurrency,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Failed to save logistics costs.");
+      setExpanded((prev) => ({ ...prev, [id]: data }));
+      setShipForm((prev) => ({ ...prev, [id]: shipFormFromQuote(data) }));
+    } catch (err) {
+      setShipError((prev) => ({
+        ...prev,
+        [id]: err instanceof Error ? err.message : "Failed to save logistics costs.",
+      }));
+    } finally {
+      setSavingShipping(null);
     }
   };
 
@@ -199,17 +384,61 @@ export default function QuotesPage() {
 
   // Per-quote totals: sums cost/sell across items in EUR, so a mixed-currency
   // quote (e.g. costed in USD, sold in AED) still shows one meaningful margin.
-  const quoteTotals = (items: QuoteItem[]) => {
+  // Also rolls up RRP-based sourcing/discount metrics (only over lines that
+  // actually have an RRP on file) and, once deal-level shipping/samples costs
+  // are set, a net margin after those logistics costs.
+  const quoteTotals = (quote: Quote) => {
     let costEur = 0;
     let sellEur = 0;
-    for (const it of items) {
+    let rrpEur = 0;
+    let costEurForRrp = 0;
+    let sellEurForRrp = 0;
+    for (const it of quote.items) {
       const qty = it.qty ?? 1;
-      if (it.costPrice !== null) costEur += toEur(it.costPrice, it.costCurrency, eurRates) * qty;
-      if (it.sellPrice !== null) sellEur += toEur(it.sellPrice, it.sellCurrency, eurRates) * qty;
+      const costEurUnit = it.costPrice !== null ? toEur(it.costPrice, it.costCurrency, eurRates) : null;
+      const sellEurUnit = it.sellPrice !== null ? toEur(it.sellPrice, it.sellCurrency, eurRates) : null;
+      const rrpEurUnit = it.rrp !== null ? toEur(it.rrp, it.costCurrency, eurRates) : null;
+      if (costEurUnit !== null) costEur += costEurUnit * qty;
+      if (sellEurUnit !== null) sellEur += sellEurUnit * qty;
+      if (rrpEurUnit !== null) {
+        rrpEur += rrpEurUnit * qty;
+        if (costEurUnit !== null) costEurForRrp += costEurUnit * qty;
+        if (sellEurUnit !== null) sellEurForRrp += sellEurUnit * qty;
+      }
     }
     const marginEur = sellEur - costEur;
     const marginPct = sellEur > 0 ? (marginEur / sellEur) * 100 : null;
-    return { costEur, sellEur, marginEur, marginPct };
+
+    const sourcingMarginEur = rrpEur > 0 ? rrpEur - costEurForRrp : null;
+    const sourcingMarginPct = rrpEur > 0 ? (sourcingMarginEur! / rrpEur) * 100 : null;
+    const avgDiscountToClientPct = rrpEur > 0 ? ((rrpEur - sellEurForRrp) / rrpEur) * 100 : null;
+
+    const shippingInEur =
+      quote.shippingInCost !== null ? toEur(quote.shippingInCost, quote.shippingInCurrency, eurRates) : 0;
+    const shippingOutEur =
+      quote.shippingOutCost !== null ? toEur(quote.shippingOutCost, quote.shippingOutCurrency, eurRates) : 0;
+    const samplesEur = quote.samplesCost !== null ? toEur(quote.samplesCost, quote.samplesCurrency, eurRates) : 0;
+    const hasLogisticsCosts =
+      quote.shippingInCost !== null || quote.shippingOutCost !== null || quote.samplesCost !== null;
+    const netMarginEur = marginEur - shippingInEur - shippingOutEur - samplesEur;
+    const netMarginPct = sellEur > 0 ? (netMarginEur / sellEur) * 100 : null;
+
+    return {
+      costEur,
+      sellEur,
+      marginEur,
+      marginPct,
+      rrpEur,
+      sourcingMarginEur,
+      sourcingMarginPct,
+      avgDiscountToClientPct,
+      hasLogisticsCosts,
+      shippingInEur,
+      shippingOutEur,
+      samplesEur,
+      netMarginEur,
+      netMarginPct,
+    };
   };
 
   return (
@@ -233,7 +462,8 @@ export default function QuotesPage() {
         <div className="space-y-3">
           {quotes.map((q) => {
             const detail = expanded[q.id];
-            const totals = detail ? quoteTotals(detail.items) : null;
+            const totals = detail ? quoteTotals(detail) : null;
+            const form = shipForm[q.id];
             return (
               <div key={q.id} className="rounded-xl border border-gray-200 bg-white">
                 <div className="flex flex-wrap items-center justify-between gap-3 p-4">
@@ -295,6 +525,16 @@ export default function QuotesPage() {
                                   {totals.marginPct !== null ? ` (${totals.marginPct.toFixed(0)}%)` : ""}
                                 </strong>
                               </span>
+                              {totals.hasLogisticsCosts && (
+                                <span>
+                                  Net margin:{" "}
+                                  <strong className={totals.netMarginEur < 0 ? "text-red-600" : "text-green-700"}>
+                                    {totals.netMarginEur >= 0 ? "+" : ""}
+                                    {formatEur(totals.netMarginEur)} EUR
+                                    {totals.netMarginPct !== null ? ` (${totals.netMarginPct.toFixed(0)}%)` : ""}
+                                  </strong>
+                                </span>
+                              )}
                             </div>
                           )}
                           <button
@@ -305,7 +545,145 @@ export default function QuotesPage() {
                             Download quote (.xlsx)
                           </button>
                         </div>
+                        {totals && totals.rrpEur > 0 && (
+                          <div className="mb-3 flex flex-wrap gap-4 rounded-lg bg-gray-50 px-3 py-2 text-xs text-gray-600">
+                            <span>
+                              RRP value ≈ <strong className="text-gray-900">{formatEur(totals.rrpEur)} EUR</strong>
+                            </span>
+                            {totals.sourcingMarginEur !== null && (
+                              <span>
+                                Sourcing margin vs RRP:{" "}
+                                <strong className="text-gray-900">
+                                  {formatEur(totals.sourcingMarginEur)} EUR
+                                  {totals.sourcingMarginPct !== null
+                                    ? ` (${totals.sourcingMarginPct.toFixed(0)}%)`
+                                    : ""}
+                                </strong>
+                              </span>
+                            )}
+                            {totals.avgDiscountToClientPct !== null && (
+                              <span>
+                                Avg. discount to client vs RRP:{" "}
+                                <strong className="text-gray-900">{totals.avgDiscountToClientPct.toFixed(0)}%</strong>
+                              </span>
+                            )}
+                          </div>
+                        )}
                         {detail.notes && <p className="mb-3 text-sm text-gray-500">Notes: {detail.notes}</p>}
+
+                        <div className="mb-4 rounded-lg border border-gray-200 p-3">
+                          <p className="mb-2 text-xs font-medium uppercase text-gray-500">
+                            Shipping &amp; samples (deal-level)
+                          </p>
+                          {form && (
+                            <div className="flex flex-wrap items-end gap-3">
+                              <label className="block text-xs text-gray-600">
+                                Shipping in
+                                <div className="mt-1 flex gap-1">
+                                  <input
+                                    type="number"
+                                    className="input w-24"
+                                    value={form.shippingInCost}
+                                    onChange={(e) =>
+                                      setShipForm((prev) => ({
+                                        ...prev,
+                                        [q.id]: { ...form, shippingInCost: e.target.value },
+                                      }))
+                                    }
+                                  />
+                                  <select
+                                    className="input w-20"
+                                    value={form.shippingInCurrency}
+                                    onChange={(e) =>
+                                      setShipForm((prev) => ({
+                                        ...prev,
+                                        [q.id]: { ...form, shippingInCurrency: e.target.value },
+                                      }))
+                                    }
+                                  >
+                                    {SUPPORTED_CURRENCIES.map((c) => (
+                                      <option key={c} value={c}>
+                                        {c}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
+                              </label>
+                              <label className="block text-xs text-gray-600">
+                                Shipping out
+                                <div className="mt-1 flex gap-1">
+                                  <input
+                                    type="number"
+                                    className="input w-24"
+                                    value={form.shippingOutCost}
+                                    onChange={(e) =>
+                                      setShipForm((prev) => ({
+                                        ...prev,
+                                        [q.id]: { ...form, shippingOutCost: e.target.value },
+                                      }))
+                                    }
+                                  />
+                                  <select
+                                    className="input w-20"
+                                    value={form.shippingOutCurrency}
+                                    onChange={(e) =>
+                                      setShipForm((prev) => ({
+                                        ...prev,
+                                        [q.id]: { ...form, shippingOutCurrency: e.target.value },
+                                      }))
+                                    }
+                                  >
+                                    {SUPPORTED_CURRENCIES.map((c) => (
+                                      <option key={c} value={c}>
+                                        {c}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
+                              </label>
+                              <label className="block text-xs text-gray-600">
+                                Samples
+                                <div className="mt-1 flex gap-1">
+                                  <input
+                                    type="number"
+                                    className="input w-24"
+                                    value={form.samplesCost}
+                                    onChange={(e) =>
+                                      setShipForm((prev) => ({
+                                        ...prev,
+                                        [q.id]: { ...form, samplesCost: e.target.value },
+                                      }))
+                                    }
+                                  />
+                                  <select
+                                    className="input w-20"
+                                    value={form.samplesCurrency}
+                                    onChange={(e) =>
+                                      setShipForm((prev) => ({
+                                        ...prev,
+                                        [q.id]: { ...form, samplesCurrency: e.target.value },
+                                      }))
+                                    }
+                                  >
+                                    {SUPPORTED_CURRENCIES.map((c) => (
+                                      <option key={c} value={c}>
+                                        {c}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
+                              </label>
+                              <button
+                                onClick={() => handleSaveShipping(q.id)}
+                                disabled={savingShipping === q.id}
+                                className="rounded-md bg-gray-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-gray-800 disabled:opacity-50"
+                              >
+                                {savingShipping === q.id ? "Saving…" : "Save"}
+                              </button>
+                            </div>
+                          )}
+                          {shipError[q.id] && <p className="mt-2 text-xs text-red-600">{shipError[q.id]}</p>}
+                        </div>
                         <div className="overflow-x-auto">
                           <table className="w-full text-left text-sm">
                             <thead className="border-b border-gray-200 text-xs uppercase text-gray-500">
@@ -313,6 +691,7 @@ export default function QuotesPage() {
                                 <th className="py-2 pr-4">Product</th>
                                 <th className="py-2 pr-4">Qty</th>
                                 <th className="py-2 pr-4">Supplier</th>
+                                <th className="py-2 pr-4">RRP</th>
                                 <th className="py-2 pr-4">Cost</th>
                                 <th className="py-2 pr-4">Sell</th>
                                 <th className="py-2 pr-4">Margin</th>
@@ -322,8 +701,13 @@ export default function QuotesPage() {
                               {detail.items.map((it) => {
                                 const costEur = it.costPrice !== null ? toEur(it.costPrice, it.costCurrency, eurRates) : null;
                                 const sellEur = it.sellPrice !== null ? toEur(it.sellPrice, it.sellCurrency, eurRates) : null;
+                                const rrpEur = it.rrp !== null ? toEur(it.rrp, it.costCurrency, eurRates) : null;
                                 const marginEur = costEur !== null && sellEur !== null ? sellEur - costEur : null;
                                 const marginPct = marginEur !== null && sellEur ? (marginEur / sellEur) * 100 : null;
+                                const buyingDiscPct =
+                                  rrpEur && rrpEur > 0 && costEur !== null ? ((rrpEur - costEur) / rrpEur) * 100 : null;
+                                const sellingDiscPct =
+                                  rrpEur && rrpEur > 0 && sellEur !== null ? ((rrpEur - sellEur) / rrpEur) * 100 : null;
                                 return (
                                   <tr key={it.id} className="border-b border-gray-100 last:border-0">
                                     <td className="py-2 pr-4 font-medium">
@@ -333,10 +717,23 @@ export default function QuotesPage() {
                                     <td className="py-2 pr-4">{it.qty ?? "—"}</td>
                                     <td className="py-2 pr-4">{it.supplier ?? "—"}</td>
                                     <td className="py-2 pr-4">
+                                      {it.rrp !== null ? `${formatMoney(it.rrp)} ${it.costCurrency}` : "—"}
+                                    </td>
+                                    <td className="py-2 pr-4">
                                       {it.costPrice !== null ? `${formatMoney(it.costPrice)} ${it.costCurrency}` : "—"}
+                                      {buyingDiscPct !== null && (
+                                        <span className="ml-1 text-xs text-gray-400">
+                                          ({buyingDiscPct.toFixed(0)}% vs RRP)
+                                        </span>
+                                      )}
                                     </td>
                                     <td className="py-2 pr-4">
                                       {it.sellPrice !== null ? `${formatMoney(it.sellPrice)} ${it.sellCurrency}` : "—"}
+                                      {sellingDiscPct !== null && (
+                                        <span className="ml-1 text-xs text-gray-400">
+                                          ({sellingDiscPct.toFixed(0)}% vs RRP)
+                                        </span>
+                                      )}
                                     </td>
                                     <td className="py-2 pr-4">
                                       {marginEur !== null ? (
