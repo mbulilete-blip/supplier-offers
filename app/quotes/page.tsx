@@ -885,110 +885,126 @@ export default function QuotesPage() {
 
                                 if (isEditing && itemForm) {
                                   return (
-                                    <tr key={it.id} className="border-b border-gray-100 bg-gray-50 last:border-0">
-                                      <td className="py-2 pr-4">
-                                        <input
-                                          className="input mb-1 w-36"
-                                          placeholder="Product"
-                                          value={itemForm.product}
-                                          onChange={(e) => setItemForm({ ...itemForm, product: e.target.value })}
-                                        />
-                                        <div className="flex gap-1">
-                                          <input
-                                            className="input w-20"
-                                            placeholder="Brand"
-                                            value={itemForm.brand}
-                                            onChange={(e) => setItemForm({ ...itemForm, brand: e.target.value })}
-                                          />
-                                          <input
-                                            className="input w-16"
-                                            placeholder="SKU"
-                                            value={itemForm.sku}
-                                            onChange={(e) => setItemForm({ ...itemForm, sku: e.target.value })}
-                                          />
-                                        </div>
-                                      </td>
-                                      <td className="py-2 pr-4">
-                                        <input
-                                          type="number"
-                                          className="input w-16"
-                                          value={itemForm.qty}
-                                          onChange={(e) => setItemForm({ ...itemForm, qty: e.target.value })}
-                                        />
-                                      </td>
-                                      <td className="py-2 pr-4">
-                                        <input
-                                          className="input w-28"
-                                          value={itemForm.supplier}
-                                          onChange={(e) => setItemForm({ ...itemForm, supplier: e.target.value })}
-                                        />
-                                      </td>
-                                      <td className="py-2 pr-4">
-                                        <input
-                                          type="number"
-                                          className="input w-20"
-                                          value={itemForm.rrp}
-                                          onChange={(e) => setItemForm({ ...itemForm, rrp: e.target.value })}
-                                        />
-                                      </td>
-                                      <td className="py-2 pr-4">
-                                        <div className="flex gap-1">
-                                          <input
-                                            type="number"
-                                            className="input w-20"
-                                            value={itemForm.costPrice}
-                                            onChange={(e) => setItemForm({ ...itemForm, costPrice: e.target.value })}
-                                          />
-                                          <select
-                                            className="input w-16"
-                                            value={itemForm.costCurrency}
-                                            onChange={(e) => setItemForm({ ...itemForm, costCurrency: e.target.value })}
-                                          >
-                                            {SUPPORTED_CURRENCIES.map((c) => (
-                                              <option key={c} value={c}>
-                                                {c}
-                                              </option>
-                                            ))}
-                                          </select>
-                                        </div>
-                                        <p className="mt-0.5 text-[10px] text-gray-400">RRP shares this currency</p>
-                                      </td>
-                                      <td className="py-2 pr-4">
-                                        <div className="flex gap-1">
-                                          <input
-                                            type="number"
-                                            className="input w-20"
-                                            value={itemForm.sellPrice}
-                                            onChange={(e) => setItemForm({ ...itemForm, sellPrice: e.target.value })}
-                                          />
-                                          <select
-                                            className="input w-16"
-                                            value={itemForm.sellCurrency}
-                                            onChange={(e) => setItemForm({ ...itemForm, sellCurrency: e.target.value })}
-                                          >
-                                            {SUPPORTED_CURRENCIES.map((c) => (
-                                              <option key={c} value={c}>
-                                                {c}
-                                              </option>
-                                            ))}
-                                          </select>
-                                        </div>
-                                      </td>
-                                      <td className="py-2 pr-2" colSpan={2}>
-                                        <div className="flex gap-2">
-                                          <button
-                                            onClick={() => handleSaveItem(q.id, it.id)}
-                                            disabled={savingItem}
-                                            className="rounded-md bg-gray-900 px-2.5 py-1 text-xs font-medium text-white hover:bg-gray-800 disabled:opacity-50"
-                                          >
-                                            {savingItem ? "Saving…" : "Save"}
-                                          </button>
-                                          <button
-                                            onClick={cancelEditItem}
-                                            className="rounded-md border border-gray-300 px-2.5 py-1 text-xs text-gray-600 hover:border-gray-400"
-                                          >
-                                            Cancel
-                                          </button>
+                                    <tr key={it.id} className="border-b border-gray-100 last:border-0">
+                                      <td colSpan={8} className="bg-gray-50 px-3 py-3">
+                                        <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+                                          <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-400">
+                                            Editing line item
+                                          </p>
+                                          <div className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3 lg:grid-cols-4">
+                                            <label className="block text-xs font-medium text-gray-500">
+                                              Product
+                                              <input
+                                                className="input mt-1 w-full"
+                                                value={itemForm.product}
+                                                onChange={(e) => setItemForm({ ...itemForm, product: e.target.value })}
+                                              />
+                                            </label>
+                                            <label className="block text-xs font-medium text-gray-500">
+                                              Brand
+                                              <input
+                                                className="input mt-1 w-full"
+                                                value={itemForm.brand}
+                                                onChange={(e) => setItemForm({ ...itemForm, brand: e.target.value })}
+                                              />
+                                            </label>
+                                            <label className="block text-xs font-medium text-gray-500">
+                                              SKU
+                                              <input
+                                                className="input mt-1 w-full"
+                                                value={itemForm.sku}
+                                                onChange={(e) => setItemForm({ ...itemForm, sku: e.target.value })}
+                                              />
+                                            </label>
+                                            <label className="block text-xs font-medium text-gray-500">
+                                              Qty
+                                              <input
+                                                type="number"
+                                                className="input mt-1 w-full"
+                                                value={itemForm.qty}
+                                                onChange={(e) => setItemForm({ ...itemForm, qty: e.target.value })}
+                                              />
+                                            </label>
+                                            <label className="block text-xs font-medium text-gray-500">
+                                              Supplier
+                                              <input
+                                                className="input mt-1 w-full"
+                                                value={itemForm.supplier}
+                                                onChange={(e) => setItemForm({ ...itemForm, supplier: e.target.value })}
+                                              />
+                                            </label>
+                                            <label className="block text-xs font-medium text-gray-500">
+                                              Cost price
+                                              <div className="mt-1 flex gap-1.5">
+                                                <input
+                                                  type="number"
+                                                  className="input w-full"
+                                                  value={itemForm.costPrice}
+                                                  onChange={(e) => setItemForm({ ...itemForm, costPrice: e.target.value })}
+                                                />
+                                                <select
+                                                  className="input w-20 shrink-0"
+                                                  value={itemForm.costCurrency}
+                                                  onChange={(e) => setItemForm({ ...itemForm, costCurrency: e.target.value })}
+                                                >
+                                                  {SUPPORTED_CURRENCIES.map((c) => (
+                                                    <option key={c} value={c}>
+                                                      {c}
+                                                    </option>
+                                                  ))}
+                                                </select>
+                                              </div>
+                                            </label>
+                                            <label className="block text-xs font-medium text-gray-500">
+                                              RRP{" "}
+                                              <span className="font-normal normal-case text-gray-400">
+                                                (in {itemForm.costCurrency})
+                                              </span>
+                                              <input
+                                                type="number"
+                                                className="input mt-1 w-full"
+                                                value={itemForm.rrp}
+                                                onChange={(e) => setItemForm({ ...itemForm, rrp: e.target.value })}
+                                              />
+                                            </label>
+                                            <label className="block text-xs font-medium text-gray-500">
+                                              Sell price
+                                              <div className="mt-1 flex gap-1.5">
+                                                <input
+                                                  type="number"
+                                                  className="input w-full"
+                                                  value={itemForm.sellPrice}
+                                                  onChange={(e) => setItemForm({ ...itemForm, sellPrice: e.target.value })}
+                                                />
+                                                <select
+                                                  className="input w-20 shrink-0"
+                                                  value={itemForm.sellCurrency}
+                                                  onChange={(e) => setItemForm({ ...itemForm, sellCurrency: e.target.value })}
+                                                >
+                                                  {SUPPORTED_CURRENCIES.map((c) => (
+                                                    <option key={c} value={c}>
+                                                      {c}
+                                                    </option>
+                                                  ))}
+                                                </select>
+                                              </div>
+                                            </label>
+                                          </div>
+                                          <div className="mt-4 flex items-center gap-2 border-t border-gray-100 pt-3">
+                                            <button
+                                              onClick={() => handleSaveItem(q.id, it.id)}
+                                              disabled={savingItem}
+                                              className="rounded-md bg-gray-900 px-4 py-1.5 text-xs font-medium text-white hover:bg-gray-800 disabled:opacity-50"
+                                            >
+                                              {savingItem ? "Saving…" : "Save changes"}
+                                            </button>
+                                            <button
+                                              onClick={cancelEditItem}
+                                              className="rounded-md border border-gray-300 px-4 py-1.5 text-xs text-gray-600 hover:border-gray-400"
+                                            >
+                                              Cancel
+                                            </button>
+                                          </div>
                                         </div>
                                       </td>
                                     </tr>
