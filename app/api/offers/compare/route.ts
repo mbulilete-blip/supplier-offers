@@ -29,6 +29,8 @@ export type CompareRow = {
   marketBestCurrency: string | null;
   marketBestPriceEur: number | null;
   verdict: "cheaper" | "matches" | "higher" | "new";
+  availability: string | null;
+  stockQty: string | null;
 };
 
 export async function POST(req: NextRequest) {
@@ -100,6 +102,8 @@ export async function POST(req: NextRequest) {
       marketBestCurrency,
       marketBestPriceEur,
       verdict,
+      availability: o.availability ?? null,
+      stockQty: o.stockQty ?? null,
     };
   });
 

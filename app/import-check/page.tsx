@@ -28,6 +28,8 @@ type CompareRow = {
   marketBestCurrency: string | null;
   marketBestPriceEur: number | null;
   verdict: "cheaper" | "matches" | "higher" | "new";
+  availability: string | null;
+  stockQty: string | null;
 };
 
 type CompareResult = {
@@ -154,6 +156,10 @@ async function downloadCompareXlsx(filename: string, rows: RankedCompareRow[]) {
     "Diff %": formatDiffPercent(diffPercent(r)),
     Verdict: VERDICT_LABEL[r.verdict],
     "Batch position": batchRankLabel(r.batchRank, r.batchGroupSize),
+    Availability: r.availability ?? "",
+    // Only meaningful for actual stock offers - blank for preorder/backorder
+    // rows or wherever the source file simply didn't quote a quantity.
+    "Stock qty": r.stockQty ?? "",
   }));
 
   const sheet = XLSX.utils.json_to_sheet(data);
@@ -170,6 +176,8 @@ async function downloadCompareXlsx(filename: string, rows: RankedCompareRow[]) {
     { wch: 10 }, // Diff %
     { wch: 18 }, // Verdict
     { wch: 32 }, // Batch position
+    { wch: 14 }, // Availability
+    { wch: 12 }, // Stock qty
   ];
 
   const workbook = XLSX.utils.book_new();
@@ -193,6 +201,7 @@ const ROLE_OPTIONS: ColumnRole[] = [
   "incoterm",
   "marketOrigin",
   "availability",
+  "stockQty",
   "extra",
 ];
 
@@ -234,6 +243,10 @@ export default function ImportCheckPage() {
   const [defaultAvailability, setDefaultAvailability] = useState<"Unknown" | "In Stock" | "Preorder">(
     "Unknown"
   );
+  // Same fallback-default treatment as MOQ: stock quantity genuinely varies
+  // product-to-product within one list, so this only fills in rows that
+  // don't already have their own value.
+  const [defaultStockQty, setDefaultStockQty] = useState("");
 
   // Optional link to the original file itself (e.g. a Dropbox/Drive share
   // link) so it can be pulled up later from any offer's detail view. Applies
@@ -330,6 +343,7 @@ export default function ImportCheckPage() {
     if (rows.length === 0 || mapping.length === 0) return null;
     const leadTimeTrimmed = defaultLeadTimeDays.trim();
     const moqTrimmed = defaultMoq.trim();
+    const stockQtyTrimmed = defaultStockQty.trim();
     return buildOffersFromMapping(rows, headerRowIndex, mapping, {
       supplierOverride: isWideFormat ? undefined : supplierName || undefined,
       defaultBrand: defaultBrand || undefined,
@@ -339,6 +353,7 @@ export default function ImportCheckPage() {
       defaultLeadTimeDays: leadTimeTrimmed === "" ? undefined : leadTimeTrimmed,
       defaultMoq: moqTrimmed === "" ? undefined : moqTrimmed,
       defaultAvailability: defaultAvailability === "Unknown" ? undefined : defaultAvailability,
+      defaultStockQty: stockQtyTrimmed === "" ? undefined : stockQtyTrimmed,
       sourceFileUrl: sourceFileUrl.trim() || undefined,
     });
   }, [
@@ -354,6 +369,7 @@ export default function ImportCheckPage() {
     defaultLeadTimeDays,
     defaultMoq,
     defaultAvailability,
+    defaultStockQty,
     sourceFileUrl,
   ]);
 
@@ -621,10 +637,22 @@ export default function ImportCheckPage() {
                 <option value="Preorder">Preorder</option>
               </select>
             </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-700">
+                Default stock qty <span className="font-normal text-gray-400">— fallback only</span>
+              </label>
+              <input
+                className="input mt-1 w-full text-sm"
+                type="text"
+                value={defaultStockQty}
+                onChange={(e) => setDefaultStockQty(e.target.value)}
+                placeholder="e.g. 500 units"
+              />
+            </div>
           </div>
           <p className="text-xs text-gray-400">
-            Lead time, MOQ, and availability defaults only fill in rows that don&apos;t already have their
-            own value — unlike supplier, Incoterm, and EU origin above, which apply to every row.
+            Lead time, MOQ, availability, and stock qty defaults only fill in rows that don&apos;t already
+            have their own value — unlike supplier, Incoterm, and EU origin above, which apply to every row.
           </p>
 
           <div className="border-t border-gray-100 pt-4">

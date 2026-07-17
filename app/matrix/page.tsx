@@ -78,6 +78,7 @@ async function downloadOffersXlsx(filename: string, offers: Offer[]) {
     Incoterm: o.incoterm ?? "",
     "Market origin": o.marketOrigin ?? "",
     Availability: o.availability ?? "",
+    "Stock qty": o.stockQty ?? "",
     Notes: o.notes ?? "",
     Added: new Date(o.createdAt).toLocaleDateString(),
   }));
@@ -98,6 +99,7 @@ async function downloadOffersXlsx(filename: string, offers: Offer[]) {
     { wch: 14 }, // Incoterm
     { wch: 14 }, // Market origin
     { wch: 14 }, // Availability
+    { wch: 12 }, // Stock qty
     { wch: 30 }, // Notes
     { wch: 12 }, // Added
   ];

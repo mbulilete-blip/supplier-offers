@@ -26,6 +26,12 @@ export type OfferInput = {
   // lost, but the import wizard normalizes common variants so filtering by
   // "In Stock" or "Preorder" actually groups things consistently.
   availability?: string | null;
+  // Free text, not a strict integer - same treatment as MOQ/lead time, since
+  // suppliers quote this as "500 units", "1200 pcs", "limited", etc. Only
+  // meaningful when the offer is actually in stock (vs. preorder/backorder),
+  // but left free so an out-of-stock or preorder row can still carry a note
+  // like "0" or "restocking" if the supplier gave one.
+  stockQty?: string | null;
   notes?: string | null;
   // Link to the original uploaded price-list file this offer came from (e.g.
   // a Dropbox/Drive share link), so the source document can be pulled up
@@ -51,6 +57,7 @@ export type Offer = {
   incoterm: string | null;
   marketOrigin: string | null;
   availability: string | null;
+  stockQty: string | null;
   notes: string | null;
   sourceFileUrl: string | null;
   createdAt: string;
@@ -71,6 +78,7 @@ export const CSV_HEADERS = [
   "incoterm",
   "marketOrigin",
   "availability",
+  "stockQty",
   "notes",
   "sourceFileUrl",
 ] as const;

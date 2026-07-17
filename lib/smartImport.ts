@@ -24,6 +24,7 @@ export type ColumnRole =
   | "incoterm"
   | "marketOrigin"
   | "availability"
+  | "stockQty"
   | "extra";
 
 export const ROLE_LABELS: Record<ColumnRole, string> = {
@@ -42,6 +43,7 @@ export const ROLE_LABELS: Record<ColumnRole, string> = {
   incoterm: "Incoterm / shipping terms (e.g. EXW)",
   marketOrigin: "EU / Non-EU origin",
   availability: "Availability (In Stock / Preorder)",
+  stockQty: "Stock qty (if in stock)",
   extra: "Extra (kept as note)",
 };
 
@@ -76,6 +78,21 @@ const KEYWORDS: Partial<Record<ColumnRole, string[]>> = {
   // Deliberately no bare "stock" keyword - too many unrelated headers
   // ("Stock Code", "Stock Qty") contain that word and would be misclaimed.
   availability: ["availability", "stock status", "preorder", "pre-order", "in stock", "stock availability"],
+  // Compound phrases only, same reasoning as availability above - a bare
+  // "qty"/"stock" keyword would misclaim unrelated columns. Checked before
+  // "moq" in ROLE_PRIORITY isn't needed since these phrases don't overlap
+  // with MOQ's keywords.
+  stockQty: [
+    "stock qty",
+    "stock quantity",
+    "qty in stock",
+    "qty available",
+    "quantity available",
+    "available qty",
+    "available quantity",
+    "units in stock",
+    "units available",
+  ],
   price: ["price", "cost", "rate", "precio", "importe", "wholesale", "offer"],
   product: ["product", "description", "name", "article", "item", "title"],
 };
@@ -97,6 +114,7 @@ const ROLE_PRIORITY: ColumnRole[] = [
   "incoterm",
   "marketOrigin",
   "availability",
+  "stockQty",
   "price",
   "product",
 ];
@@ -327,6 +345,12 @@ export type BuildOptions = {
   // varies product-to-product within one list, so a per-row column value
   // always wins and this only fills in rows that have none.
   defaultAvailability?: string;
+  // Same fallback-default pattern as MOQ - genuinely varies product-to-
+  // product within one list (a supplier rarely has the exact same stock
+  // count for every SKU), so a per-row column value always wins and this
+  // only fills in rows with none. Free text, not a strict integer - same
+  // reasoning as MOQ (e.g. "500 units", "limited").
+  defaultStockQty?: string;
   // Link to the original uploaded file (e.g. a Dropbox/Drive share link),
   // stamped onto every offer built from this batch so the source document
   // can be opened later from any offer's detail view. No column ever
@@ -383,6 +407,7 @@ export function buildOffersFromMapping(
   const incotermCol = firstByRole("incoterm");
   const marketOriginCol = firstByRole("marketOrigin");
   const availabilityCol = firstByRole("availability");
+  const stockQtyCol = firstByRole("stockQty");
   const extraCols = byRole("extra");
 
   const isWideFormat = priceCols.length > 1 && !supplierCol;
@@ -426,6 +451,8 @@ export function buildOffersFromMapping(
       normalizeAvailability(str(availabilityCol ? r[availabilityCol.index] : undefined)) ??
       normalizeAvailability(options.defaultAvailability) ??
       null;
+    const stockQty =
+      str(stockQtyCol ? r[stockQtyCol.index] : undefined) ?? options.defaultStockQty ?? null;
     const notes = buildNotes(r) ?? null;
 
     if (!product) {
@@ -462,6 +489,7 @@ export function buildOffersFromMapping(
           incoterm,
           marketOrigin,
           availability,
+          stockQty,
           notes,
           sourceFileUrl,
         });
@@ -505,6 +533,7 @@ export function buildOffersFromMapping(
         incoterm,
         marketOrigin,
         availability,
+        stockQty,
         notes,
         sourceFileUrl,
       });
@@ -542,6 +571,7 @@ export function offersToCsv(offers: OfferInput[]): string {
         o.incoterm ?? "",
         o.marketOrigin ?? "",
         o.availability ?? "",
+        o.stockQty ?? "",
         o.notes ?? "",
         o.sourceFileUrl ?? "",
       ]

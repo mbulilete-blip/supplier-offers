@@ -43,6 +43,10 @@ const FIELDS: { key: keyof OfferInput; label: string; type?: string; inputMode?:
   { key: "incoterm", label: "Incoterm" },
   { key: "marketOrigin", label: "Market origin" },
   { key: "availability", label: "Availability" },
+  // Free text on purpose, same reasoning as MOQ/lead time above - suppliers
+  // quote this as "500 units", "1200 pcs", "limited", etc. Only really
+  // meaningful alongside Availability = "In Stock".
+  { key: "stockQty", label: "Stock qty" },
   { key: "notes", label: "Notes" },
   // Link to the original uploaded price-list file this offer came from (set
   // per-batch on Check New Prices, but fixable here per-offer too). Rendered
@@ -119,6 +123,7 @@ export default function EditOfferModal({ offer, onClose, onSaved }: Props) {
       incoterm: form.incoterm.trim() || null,
       marketOrigin: form.marketOrigin.trim() || null,
       availability: form.availability.trim() || null,
+      stockQty: form.stockQty.trim() || null,
       notes: form.notes.trim() || null,
       sourceFileUrl: form.sourceFileUrl.trim() || null,
     };
