@@ -76,6 +76,10 @@ async function downloadQuoteXlsx(quote: Quote, eurRates: EurRates) {
   ].filter(Boolean) as string[];
   rows.push([infoParts.join("   ")]);
   rows.push([]);
+  // Currency (and %, for the discount columns) is baked directly into each
+  // cell's text rather than split into a separate column - a bare number
+  // next to the wrong column header is easy to misread once you're scanning
+  // fast, and this is meant to be readable at a glance.
   rows.push([
     "Product",
     "Brand",
@@ -83,12 +87,10 @@ async function downloadQuoteXlsx(quote: Quote, eurRates: EurRates) {
     "Qty",
     "Supplier",
     "Cost price",
-    "Cost currency",
     "RRP",
-    "Buying disc. vs RRP %",
+    "Buying disc. vs RRP",
     "Sell price",
-    "Sell currency",
-    "Selling disc. vs RRP %",
+    "Selling disc. vs RRP",
     "Line total (sell)",
     "Margin (EUR)",
   ]);
@@ -140,30 +142,28 @@ async function downloadQuoteXlsx(quote: Quote, eurRates: EurRates) {
       it.sku ?? "",
       it.qty ?? "",
       it.supplier ?? "",
-      it.costPrice ?? "",
-      it.costCurrency ?? "",
-      it.rrp ?? "",
-      buyingDiscPct !== null ? Number(buyingDiscPct.toFixed(1)) : "",
-      it.sellPrice ?? "",
-      currency,
-      sellingDiscPct !== null ? Number(sellingDiscPct.toFixed(1)) : "",
-      lineTotal !== null ? Number(lineTotal.toFixed(2)) : "",
-      marginEur !== null ? Number(marginEur.toFixed(2)) : "",
+      it.costPrice !== null ? `${formatMoney(it.costPrice)} ${it.costCurrency ?? ""}`.trim() : "",
+      it.rrp !== null ? `${formatMoney(it.rrp)} ${it.costCurrency ?? ""}`.trim() : "",
+      buyingDiscPct !== null ? `${buyingDiscPct.toFixed(1)}%` : "",
+      it.sellPrice !== null ? `${formatMoney(it.sellPrice)} ${currency}`.trim() : "",
+      sellingDiscPct !== null ? `${sellingDiscPct.toFixed(1)}%` : "",
+      lineTotal !== null ? `${formatMoney(lineTotal)} ${currency}`.trim() : "",
+      marginEur !== null ? `${marginEur >= 0 ? "+" : ""}${formatMoney(marginEur)} EUR` : "",
     ]);
   }
 
   const blankRow = (label: string, value: string | number) => {
-    const r: (string | number)[] = new Array(13).fill("");
+    const r: (string | number)[] = new Array(10).fill("");
     r.push(label);
     r.push(value);
     return r;
   };
 
   rows.push([]);
-  rows.push(blankRow("Total margin (EUR)", Number(marginEurTotal.toFixed(2))));
+  rows.push(blankRow("Total margin (EUR)", `${formatMoney(marginEurTotal)} EUR`));
   const currencyTotals = Object.entries(totalsByCurrency);
   for (const [currency, total] of currencyTotals) {
-    rows.push(blankRow(`Total sell (${currency})`, Number(total.toFixed(2))));
+    rows.push(blankRow(`Total sell (${currency})`, `${formatMoney(total)} ${currency}`));
   }
 
   // Expanded pricing-intelligence summary block - RRP value, discount to
@@ -174,16 +174,16 @@ async function downloadQuoteXlsx(quote: Quote, eurRates: EurRates) {
     const avgDiscountToClientPct = ((rrpEurTotal - sellEurForRrpTotal) / rrpEurTotal) * 100;
     const sourcingMarginEur = rrpEurTotal - costEurForRrpTotal;
     const sourcingMarginPct = (sourcingMarginEur / rrpEurTotal) * 100;
-    rows.push(["Total RRP value (EUR)", Number(rrpEurTotal.toFixed(2))]);
+    rows.push(["Total RRP value (EUR)", `${formatMoney(rrpEurTotal)} EUR`]);
     rows.push(["Average discount to client vs RRP", `${avgDiscountToClientPct.toFixed(1)}%`]);
     rows.push([
       "Sourcing margin (RRP vs cost, EUR)",
-      `${Number(sourcingMarginEur.toFixed(2))} (${sourcingMarginPct.toFixed(1)}%)`,
+      `${formatMoney(sourcingMarginEur)} EUR (${sourcingMarginPct.toFixed(1)}%)`,
     ]);
   }
   rows.push([
     "Gross margin (sell - cost, EUR)",
-    `${Number(marginEurTotal.toFixed(2))} (${sellEurTotal > 0 ? ((marginEurTotal / sellEurTotal) * 100).toFixed(1) : "0.0"}%)`,
+    `${formatMoney(marginEurTotal)} EUR (${sellEurTotal > 0 ? ((marginEurTotal / sellEurTotal) * 100).toFixed(1) : "0.0"}%)`,
   ]);
 
   const shippingInEur =
@@ -197,26 +197,26 @@ async function downloadQuoteXlsx(quote: Quote, eurRates: EurRates) {
     if (quote.shippingInCost !== null) {
       rows.push([
         "Shipping in (EUR)",
-        `${Number(shippingInEur.toFixed(2))} (${formatMoney(quote.shippingInCost)} ${quote.shippingInCurrency ?? ""})`,
+        `${formatMoney(shippingInEur)} EUR (${formatMoney(quote.shippingInCost)} ${quote.shippingInCurrency ?? ""})`,
       ]);
     }
     if (quote.shippingOutCost !== null) {
       rows.push([
         "Shipping out (EUR)",
-        `${Number(shippingOutEur.toFixed(2))} (${formatMoney(quote.shippingOutCost)} ${quote.shippingOutCurrency ?? ""})`,
+        `${formatMoney(shippingOutEur)} EUR (${formatMoney(quote.shippingOutCost)} ${quote.shippingOutCurrency ?? ""})`,
       ]);
     }
     if (quote.samplesCost !== null) {
       rows.push([
         "Samples (EUR)",
-        `${Number(samplesEur.toFixed(2))} (${formatMoney(quote.samplesCost)} ${quote.samplesCurrency ?? ""})`,
+        `${formatMoney(samplesEur)} EUR (${formatMoney(quote.samplesCost)} ${quote.samplesCurrency ?? ""})`,
       ]);
     }
     const netMarginEur = marginEurTotal - shippingInEur - shippingOutEur - samplesEur;
     const netMarginPct = sellEurTotal > 0 ? (netMarginEur / sellEurTotal) * 100 : null;
     rows.push([
       "Net margin (after shipping + samples, EUR)",
-      `${Number(netMarginEur.toFixed(2))}${netMarginPct !== null ? ` (${netMarginPct.toFixed(1)}%)` : ""}`,
+      `${netMarginEur >= 0 ? "+" : ""}${formatMoney(netMarginEur)} EUR${netMarginPct !== null ? ` (${netMarginPct.toFixed(1)}%)` : ""}`,
     ]);
   }
 
@@ -232,15 +232,13 @@ async function downloadQuoteXlsx(quote: Quote, eurRates: EurRates) {
     { wch: 16 }, // SKU
     { wch: 8 }, // Qty
     { wch: 20 }, // Supplier
-    { wch: 12 }, // Cost price
-    { wch: 12 }, // Cost currency
-    { wch: 10 }, // RRP
-    { wch: 14 }, // Buying disc. vs RRP %
-    { wch: 12 }, // Sell price
-    { wch: 12 }, // Sell currency
-    { wch: 14 }, // Selling disc. vs RRP %
-    { wch: 16 }, // Line total
-    { wch: 14 }, // Margin
+    { wch: 16 }, // Cost price
+    { wch: 16 }, // RRP
+    { wch: 16 }, // Buying disc. vs RRP
+    { wch: 16 }, // Sell price
+    { wch: 16 }, // Selling disc. vs RRP
+    { wch: 18 }, // Line total
+    { wch: 16 }, // Margin
   ];
 
   const workbook = XLSX.utils.book_new();
