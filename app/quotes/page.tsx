@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { EurRates, formatEur, formatMoney, toEur, SUPPORTED_CURRENCIES } from "@/lib/currency";
+import type { QuoteItemInput } from "@/lib/db";
 
 type QuoteStatus = "quoted" | "won" | "lost" | "shipped";
 
@@ -269,6 +270,179 @@ export default function QuotesPage() {
   const [shipForm, setShipForm] = useState<Record<number, ShipForm>>({});
   const [savingShipping, setSavingShipping] = useState<number | null>(null);
   const [shipError, setShipError] = useState<Record<number, string>>({});
+
+  // Editable line items - a saved quote's product/qty/supplier/cost/sell/RRP
+  // can be corrected after the fact (typo fixes, supplier swaps mid-deal,
+  // customer adds/drops a product) without deleting and re-saving the whole
+  // quote. Free-text form state per field, same pattern as ShipForm above.
+  type ItemForm = {
+    product: string;
+    brand: string;
+    sku: string;
+    qty: string;
+    supplier: string;
+    costPrice: string;
+    costCurrency: string;
+    sellPrice: string;
+    sellCurrency: string;
+    rrp: string;
+  };
+  const emptyItemForm = (): ItemForm => ({
+    product: "",
+    brand: "",
+    sku: "",
+    qty: "",
+    supplier: "",
+    costPrice: "",
+    costCurrency: "EUR",
+    sellPrice: "",
+    sellCurrency: "EUR",
+    rrp: "",
+  });
+  const itemFormFromItem = (it: QuoteItem): ItemForm => ({
+    product: it.product,
+    brand: it.brand ?? "",
+    sku: it.sku ?? "",
+    qty: it.qty !== null ? String(it.qty) : "",
+    supplier: it.supplier ?? "",
+    costPrice: it.costPrice !== null ? String(it.costPrice) : "",
+    costCurrency: it.costCurrency ?? "EUR",
+    sellPrice: it.sellPrice !== null ? String(it.sellPrice) : "",
+    sellCurrency: it.sellCurrency ?? "EUR",
+    rrp: it.rrp !== null ? String(it.rrp) : "",
+  });
+
+  const [editingItem, setEditingItem] = useState<{ quoteId: number; itemId: number } | null>(null);
+  const [itemForm, setItemForm] = useState<ItemForm | null>(null);
+  const [savingItem, setSavingItem] = useState(false);
+  const [itemError, setItemError] = useState<Record<number, string>>({});
+  const [addingItemQuoteId, setAddingItemQuoteId] = useState<number | null>(null);
+  const [newItemForm, setNewItemForm] = useState<ItemForm>(emptyItemForm());
+
+  const parseItemForm = (form: ItemForm): { input?: QuoteItemInput; error?: string } => {
+    if (!form.product.trim()) return { error: "Product is required." };
+    const parseNum = (v: string): number | null | undefined => {
+      const t = v.trim();
+      if (t === "") return null;
+      const n = Number(t);
+      return Number.isFinite(n) ? n : undefined;
+    };
+    const qty = parseNum(form.qty);
+    const costPrice = parseNum(form.costPrice);
+    const sellPrice = parseNum(form.sellPrice);
+    const rrp = parseNum(form.rrp);
+    if (qty === undefined || costPrice === undefined || sellPrice === undefined || rrp === undefined) {
+      return { error: "Enter valid numbers, or leave a field blank to clear it." };
+    }
+    return {
+      input: {
+        product: form.product.trim(),
+        brand: form.brand.trim() || null,
+        sku: form.sku.trim() || null,
+        qty,
+        supplier: form.supplier.trim() || null,
+        costPrice,
+        costCurrency: form.costCurrency,
+        sellPrice,
+        sellCurrency: form.sellCurrency,
+        rrp,
+      },
+    };
+  };
+
+  const startEditItem = (quoteId: number, it: QuoteItem) => {
+    setEditingItem({ quoteId, itemId: it.id });
+    setItemForm(itemFormFromItem(it));
+    setItemError((prev) => ({ ...prev, [quoteId]: "" }));
+  };
+
+  const cancelEditItem = () => {
+    setEditingItem(null);
+    setItemForm(null);
+  };
+
+  const handleSaveItem = async (quoteId: number, itemId: number) => {
+    if (!itemForm) return;
+    const parsed = parseItemForm(itemForm);
+    if (parsed.error || !parsed.input) {
+      setItemError((prev) => ({ ...prev, [quoteId]: parsed.error ?? "Invalid item." }));
+      return;
+    }
+    setSavingItem(true);
+    try {
+      const res = await fetch(`/api/quotes/${quoteId}/items/${itemId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(parsed.input),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Failed to save item.");
+      setExpanded((prev) => {
+        const q = prev[quoteId];
+        if (!q) return prev;
+        return { ...prev, [quoteId]: { ...q, items: q.items.map((i) => (i.id === itemId ? data : i)) } };
+      });
+      setItemError((prev) => ({ ...prev, [quoteId]: "" }));
+      cancelEditItem();
+    } catch (err) {
+      setItemError((prev) => ({
+        ...prev,
+        [quoteId]: err instanceof Error ? err.message : "Failed to save item.",
+      }));
+    } finally {
+      setSavingItem(false);
+    }
+  };
+
+  const handleDeleteItem = async (quoteId: number, itemId: number) => {
+    if (!confirm("Remove this line item?")) return;
+    const res = await fetch(`/api/quotes/${quoteId}/items/${itemId}`, { method: "DELETE" });
+    if (!res.ok) {
+      setItemError((prev) => ({ ...prev, [quoteId]: "Failed to remove item." }));
+      return;
+    }
+    setExpanded((prev) => {
+      const q = prev[quoteId];
+      if (!q) return prev;
+      return { ...prev, [quoteId]: { ...q, items: q.items.filter((i) => i.id !== itemId) } };
+    });
+    setQuotes((prev) => prev.map((q) => (q.id === quoteId ? { ...q, itemCount: Math.max(0, q.itemCount - 1) } : q)));
+    if (editingItem?.quoteId === quoteId && editingItem.itemId === itemId) cancelEditItem();
+  };
+
+  const handleAddItem = async (quoteId: number) => {
+    const parsed = parseItemForm(newItemForm);
+    if (parsed.error || !parsed.input) {
+      setItemError((prev) => ({ ...prev, [quoteId]: parsed.error ?? "Invalid item." }));
+      return;
+    }
+    setSavingItem(true);
+    try {
+      const res = await fetch(`/api/quotes/${quoteId}/items`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(parsed.input),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Failed to add item.");
+      setExpanded((prev) => {
+        const q = prev[quoteId];
+        if (!q) return prev;
+        return { ...prev, [quoteId]: { ...q, items: [...q.items, data] } };
+      });
+      setQuotes((prev) => prev.map((q) => (q.id === quoteId ? { ...q, itemCount: q.itemCount + 1 } : q)));
+      setItemError((prev) => ({ ...prev, [quoteId]: "" }));
+      setNewItemForm(emptyItemForm());
+      setAddingItemQuoteId(null);
+    } catch (err) {
+      setItemError((prev) => ({
+        ...prev,
+        [quoteId]: err instanceof Error ? err.message : "Failed to add item.",
+      }));
+    } finally {
+      setSavingItem(false);
+    }
+  };
 
   const shipFormFromQuote = (q: Quote): ShipForm => ({
     shippingInCost: q.shippingInCost !== null ? String(q.shippingInCost) : "",
@@ -693,6 +867,7 @@ export default function QuotesPage() {
                                 <th className="py-2 pr-4">Cost</th>
                                 <th className="py-2 pr-4">Sell</th>
                                 <th className="py-2 pr-4">Margin</th>
+                                <th className="py-2 pr-2"></th>
                               </tr>
                             </thead>
                             <tbody>
@@ -706,6 +881,120 @@ export default function QuotesPage() {
                                   rrpEur && rrpEur > 0 && costEur !== null ? ((rrpEur - costEur) / rrpEur) * 100 : null;
                                 const sellingDiscPct =
                                   rrpEur && rrpEur > 0 && sellEur !== null ? ((rrpEur - sellEur) / rrpEur) * 100 : null;
+                                const isEditing = editingItem?.quoteId === q.id && editingItem.itemId === it.id;
+
+                                if (isEditing && itemForm) {
+                                  return (
+                                    <tr key={it.id} className="border-b border-gray-100 bg-gray-50 last:border-0">
+                                      <td className="py-2 pr-4">
+                                        <input
+                                          className="input mb-1 w-36"
+                                          placeholder="Product"
+                                          value={itemForm.product}
+                                          onChange={(e) => setItemForm({ ...itemForm, product: e.target.value })}
+                                        />
+                                        <div className="flex gap-1">
+                                          <input
+                                            className="input w-20"
+                                            placeholder="Brand"
+                                            value={itemForm.brand}
+                                            onChange={(e) => setItemForm({ ...itemForm, brand: e.target.value })}
+                                          />
+                                          <input
+                                            className="input w-16"
+                                            placeholder="SKU"
+                                            value={itemForm.sku}
+                                            onChange={(e) => setItemForm({ ...itemForm, sku: e.target.value })}
+                                          />
+                                        </div>
+                                      </td>
+                                      <td className="py-2 pr-4">
+                                        <input
+                                          type="number"
+                                          className="input w-16"
+                                          value={itemForm.qty}
+                                          onChange={(e) => setItemForm({ ...itemForm, qty: e.target.value })}
+                                        />
+                                      </td>
+                                      <td className="py-2 pr-4">
+                                        <input
+                                          className="input w-28"
+                                          value={itemForm.supplier}
+                                          onChange={(e) => setItemForm({ ...itemForm, supplier: e.target.value })}
+                                        />
+                                      </td>
+                                      <td className="py-2 pr-4">
+                                        <input
+                                          type="number"
+                                          className="input w-20"
+                                          value={itemForm.rrp}
+                                          onChange={(e) => setItemForm({ ...itemForm, rrp: e.target.value })}
+                                        />
+                                      </td>
+                                      <td className="py-2 pr-4">
+                                        <div className="flex gap-1">
+                                          <input
+                                            type="number"
+                                            className="input w-20"
+                                            value={itemForm.costPrice}
+                                            onChange={(e) => setItemForm({ ...itemForm, costPrice: e.target.value })}
+                                          />
+                                          <select
+                                            className="input w-16"
+                                            value={itemForm.costCurrency}
+                                            onChange={(e) => setItemForm({ ...itemForm, costCurrency: e.target.value })}
+                                          >
+                                            {SUPPORTED_CURRENCIES.map((c) => (
+                                              <option key={c} value={c}>
+                                                {c}
+                                              </option>
+                                            ))}
+                                          </select>
+                                        </div>
+                                        <p className="mt-0.5 text-[10px] text-gray-400">RRP shares this currency</p>
+                                      </td>
+                                      <td className="py-2 pr-4">
+                                        <div className="flex gap-1">
+                                          <input
+                                            type="number"
+                                            className="input w-20"
+                                            value={itemForm.sellPrice}
+                                            onChange={(e) => setItemForm({ ...itemForm, sellPrice: e.target.value })}
+                                          />
+                                          <select
+                                            className="input w-16"
+                                            value={itemForm.sellCurrency}
+                                            onChange={(e) => setItemForm({ ...itemForm, sellCurrency: e.target.value })}
+                                          >
+                                            {SUPPORTED_CURRENCIES.map((c) => (
+                                              <option key={c} value={c}>
+                                                {c}
+                                              </option>
+                                            ))}
+                                          </select>
+                                        </div>
+                                      </td>
+                                      <td className="py-2 pr-2" colSpan={2}>
+                                        <div className="flex gap-2">
+                                          <button
+                                            onClick={() => handleSaveItem(q.id, it.id)}
+                                            disabled={savingItem}
+                                            className="rounded-md bg-gray-900 px-2.5 py-1 text-xs font-medium text-white hover:bg-gray-800 disabled:opacity-50"
+                                          >
+                                            {savingItem ? "Saving…" : "Save"}
+                                          </button>
+                                          <button
+                                            onClick={cancelEditItem}
+                                            className="rounded-md border border-gray-300 px-2.5 py-1 text-xs text-gray-600 hover:border-gray-400"
+                                          >
+                                            Cancel
+                                          </button>
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  );
+                                }
+
                                 return (
                                   <tr key={it.id} className="border-b border-gray-100 last:border-0">
                                     <td className="py-2 pr-4 font-medium">
@@ -744,11 +1033,160 @@ export default function QuotesPage() {
                                         "—"
                                       )}
                                     </td>
+                                    <td className="py-2 pr-2">
+                                      <div className="flex gap-2 text-xs">
+                                        <button
+                                          onClick={() => startEditItem(q.id, it)}
+                                          className="text-gray-400 hover:text-gray-700"
+                                        >
+                                          Edit
+                                        </button>
+                                        <button
+                                          onClick={() => handleDeleteItem(q.id, it.id)}
+                                          className="text-gray-400 hover:text-red-600"
+                                        >
+                                          Delete
+                                        </button>
+                                      </div>
+                                    </td>
                                   </tr>
                                 );
                               })}
                             </tbody>
                           </table>
+                        </div>
+
+                        {itemError[q.id] && <p className="mt-2 text-xs text-red-600">{itemError[q.id]}</p>}
+
+                        <div className="mt-3">
+                          {addingItemQuoteId === q.id ? (
+                            <div className="rounded-lg border border-gray-200 p-3">
+                              <p className="mb-2 text-xs font-medium uppercase text-gray-500">Add item</p>
+                              <div className="flex flex-wrap items-end gap-2">
+                                <label className="block text-xs text-gray-600">
+                                  Product
+                                  <input
+                                    className="input mt-1 w-36"
+                                    value={newItemForm.product}
+                                    onChange={(e) => setNewItemForm({ ...newItemForm, product: e.target.value })}
+                                  />
+                                </label>
+                                <label className="block text-xs text-gray-600">
+                                  Brand
+                                  <input
+                                    className="input mt-1 w-24"
+                                    value={newItemForm.brand}
+                                    onChange={(e) => setNewItemForm({ ...newItemForm, brand: e.target.value })}
+                                  />
+                                </label>
+                                <label className="block text-xs text-gray-600">
+                                  SKU
+                                  <input
+                                    className="input mt-1 w-20"
+                                    value={newItemForm.sku}
+                                    onChange={(e) => setNewItemForm({ ...newItemForm, sku: e.target.value })}
+                                  />
+                                </label>
+                                <label className="block text-xs text-gray-600">
+                                  Qty
+                                  <input
+                                    type="number"
+                                    className="input mt-1 w-16"
+                                    value={newItemForm.qty}
+                                    onChange={(e) => setNewItemForm({ ...newItemForm, qty: e.target.value })}
+                                  />
+                                </label>
+                                <label className="block text-xs text-gray-600">
+                                  Supplier
+                                  <input
+                                    className="input mt-1 w-24"
+                                    value={newItemForm.supplier}
+                                    onChange={(e) => setNewItemForm({ ...newItemForm, supplier: e.target.value })}
+                                  />
+                                </label>
+                                <label className="block text-xs text-gray-600">
+                                  RRP
+                                  <input
+                                    type="number"
+                                    className="input mt-1 w-20"
+                                    value={newItemForm.rrp}
+                                    onChange={(e) => setNewItemForm({ ...newItemForm, rrp: e.target.value })}
+                                  />
+                                </label>
+                                <label className="block text-xs text-gray-600">
+                                  Cost
+                                  <div className="mt-1 flex gap-1">
+                                    <input
+                                      type="number"
+                                      className="input w-20"
+                                      value={newItemForm.costPrice}
+                                      onChange={(e) => setNewItemForm({ ...newItemForm, costPrice: e.target.value })}
+                                    />
+                                    <select
+                                      className="input w-16"
+                                      value={newItemForm.costCurrency}
+                                      onChange={(e) => setNewItemForm({ ...newItemForm, costCurrency: e.target.value })}
+                                    >
+                                      {SUPPORTED_CURRENCIES.map((c) => (
+                                        <option key={c} value={c}>
+                                          {c}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </div>
+                                </label>
+                                <label className="block text-xs text-gray-600">
+                                  Sell
+                                  <div className="mt-1 flex gap-1">
+                                    <input
+                                      type="number"
+                                      className="input w-20"
+                                      value={newItemForm.sellPrice}
+                                      onChange={(e) => setNewItemForm({ ...newItemForm, sellPrice: e.target.value })}
+                                    />
+                                    <select
+                                      className="input w-16"
+                                      value={newItemForm.sellCurrency}
+                                      onChange={(e) => setNewItemForm({ ...newItemForm, sellCurrency: e.target.value })}
+                                    >
+                                      {SUPPORTED_CURRENCIES.map((c) => (
+                                        <option key={c} value={c}>
+                                          {c}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </div>
+                                </label>
+                                <button
+                                  onClick={() => handleAddItem(q.id)}
+                                  disabled={savingItem}
+                                  className="rounded-md bg-gray-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-gray-800 disabled:opacity-50"
+                                >
+                                  {savingItem ? "Adding…" : "Add"}
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    setAddingItemQuoteId(null);
+                                    setItemError((prev) => ({ ...prev, [q.id]: "" }));
+                                  }}
+                                  className="rounded-md border border-gray-300 px-3 py-1.5 text-xs text-gray-600 hover:border-gray-400"
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => {
+                                setAddingItemQuoteId(q.id);
+                                setNewItemForm(emptyItemForm());
+                                setItemError((prev) => ({ ...prev, [q.id]: "" }));
+                              }}
+                              className="text-xs font-medium text-gray-500 hover:text-gray-900"
+                            >
+                              + Add item
+                            </button>
+                          )}
                         </div>
                       </>
                     ) : null}

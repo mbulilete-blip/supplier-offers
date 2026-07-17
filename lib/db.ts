@@ -1117,3 +1117,114 @@ export async function deleteQuote(id: number): Promise<boolean> {
   const { rowCount } = await getPool().query(`DELETE FROM quotes WHERE id = $1;`, [id]);
   return (rowCount ?? 0) > 0;
 }
+
+// Adds one more line item to an already-saved quote (e.g. the customer asks
+// to add a product after the quote went out). Returns null if the quote
+// itself doesn't exist, so the route can 404 instead of hitting a foreign
+// key error on insert.
+export async function addQuoteItem(quoteId: number, input: QuoteItemInput): Promise<QuoteItem | null> {
+  await ensureSchema();
+  const pool = getPool();
+  const quoteExists = await pool.query(`SELECT id FROM quotes WHERE id = $1;`, [quoteId]);
+  if (quoteExists.rows.length === 0) return null;
+
+  const { rows } = await pool.query(
+    `INSERT INTO quote_items
+       (quote_id, offer_id, brand, product, sku, qty, supplier, cost_price, cost_currency, sell_price, sell_currency, rrp)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+     RETURNING *;`,
+    [
+      quoteId,
+      input.offerId ?? null,
+      input.brand ?? null,
+      input.product,
+      input.sku ?? null,
+      input.qty ?? null,
+      input.supplier ?? null,
+      input.costPrice ?? null,
+      input.costCurrency ?? null,
+      input.sellPrice ?? null,
+      input.sellCurrency ?? null,
+      input.rrp ?? null,
+    ]
+  );
+  await pool.query(`UPDATE quotes SET updated_at = now() WHERE id = $1;`, [quoteId]);
+  return mapQuoteItemRow(rows[0]);
+}
+
+// Edits one line item on a saved quote - e.g. correcting a qty typo, moving
+// to a cheaper supplier that was sourced after the quote was first saved, or
+// adjusting the sell price mid-negotiation. Scoped to (quoteId, itemId) so a
+// stale/guessed item id from a different quote can never be edited by
+// mistake. Returns null if the item isn't found under that quote.
+export async function updateQuoteItem(
+  quoteId: number,
+  itemId: number,
+  input: Partial<QuoteItemInput>
+): Promise<QuoteItem | null> {
+  await ensureSchema();
+  const pool = getPool();
+  const existing = await pool.query(
+    `SELECT * FROM quote_items WHERE id = $1 AND quote_id = $2;`,
+    [itemId, quoteId]
+  );
+  if (existing.rows.length === 0) return null;
+  const current = existing.rows[0];
+
+  const merged = {
+    offerId: input.offerId !== undefined ? input.offerId : current.offer_id,
+    brand: input.brand !== undefined ? input.brand : current.brand,
+    product: input.product ?? current.product,
+    sku: input.sku !== undefined ? input.sku : current.sku,
+    qty: input.qty !== undefined ? input.qty : current.qty === null ? null : Number(current.qty),
+    supplier: input.supplier !== undefined ? input.supplier : current.supplier,
+    costPrice:
+      input.costPrice !== undefined ? input.costPrice : current.cost_price === null ? null : Number(current.cost_price),
+    costCurrency: input.costCurrency !== undefined ? input.costCurrency : current.cost_currency,
+    sellPrice:
+      input.sellPrice !== undefined ? input.sellPrice : current.sell_price === null ? null : Number(current.sell_price),
+    sellCurrency: input.sellCurrency !== undefined ? input.sellCurrency : current.sell_currency,
+    rrp: input.rrp !== undefined ? input.rrp : current.rrp === null ? null : Number(current.rrp),
+  };
+
+  const { rows } = await pool.query(
+    `UPDATE quote_items SET
+       offer_id = $1, brand = $2, product = $3, sku = $4, qty = $5, supplier = $6,
+       cost_price = $7, cost_currency = $8, sell_price = $9, sell_currency = $10, rrp = $11
+     WHERE id = $12 AND quote_id = $13
+     RETURNING *;`,
+    [
+      merged.offerId ?? null,
+      merged.brand ?? null,
+      merged.product,
+      merged.sku ?? null,
+      merged.qty ?? null,
+      merged.supplier ?? null,
+      merged.costPrice ?? null,
+      merged.costCurrency ?? null,
+      merged.sellPrice ?? null,
+      merged.sellCurrency ?? null,
+      merged.rrp ?? null,
+      itemId,
+      quoteId,
+    ]
+  );
+  await pool.query(`UPDATE quotes SET updated_at = now() WHERE id = $1;`, [quoteId]);
+  return mapQuoteItemRow(rows[0]);
+}
+
+// Removes one line item from a saved quote (e.g. the customer dropped a
+// product). Scoped to (quoteId, itemId) for the same reason as
+// updateQuoteItem above.
+export async function deleteQuoteItem(quoteId: number, itemId: number): Promise<boolean> {
+  await ensureSchema();
+  const pool = getPool();
+  const { rowCount } = await pool.query(
+    `DELETE FROM quote_items WHERE id = $1 AND quote_id = $2;`,
+    [itemId, quoteId]
+  );
+  if ((rowCount ?? 0) > 0) {
+    await pool.query(`UPDATE quotes SET updated_at = now() WHERE id = $1;`, [quoteId]);
+  }
+  return (rowCount ?? 0) > 0;
+}
