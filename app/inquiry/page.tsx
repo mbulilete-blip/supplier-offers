@@ -26,6 +26,10 @@ type InquiryItem = {
   // price column - see lib/inquiryImport.ts.
   targetPrice: number | null;
   targetCurrency: string | null;
+  // Your own buying cost for this line, if the uploaded list had a cost
+  // column - see lib/inquiryImport.ts and myCostOffer() below.
+  myCost: number | null;
+  myCostCurrency: string | null;
 };
 
 type InquiryResultRow = {
@@ -45,6 +49,7 @@ const ROLE_OPTIONS: InquiryColumnRole[] = [
   "sku",
   "qty",
   "targetPrice",
+  "cost",
   "currency",
   "ignore",
 ];
@@ -93,6 +98,44 @@ const offerTooltip = (o: Offer): string => {
   return `${parts.join(" · ")}\nClick to edit full details`;
 };
 
+// Sentinel id for the synthetic "My cost" cost-basis row below - negative so
+// it never collides with a real (autoincrement, positive) offer id from the
+// database.
+const MY_COST_OFFER_ID = -1;
+
+// Synthesizes a selectable cost-basis row from the buying cost the user
+// uploaded alongside the wanted list (see lib/inquiryImport.ts), so a line
+// can be quoted/margin-checked even when there's no supplier offer already
+// on file - or so a known real cost can be picked over a matched offer that
+// may be stale or from the wrong batch. This is never written to the offers
+// table: it doesn't go through /api/offers, isn't editable via
+// EditOfferModal, and handleSaveQuote below sends offerId: null for it
+// instead of this fake id (offer_id is a real foreign key to offers.id).
+function myCostOffer(item: InquiryItem): Offer | null {
+  if (item.myCost === null) return null;
+  return {
+    id: MY_COST_OFFER_ID,
+    supplier: "My cost (uploaded)",
+    brand: item.brand ?? "",
+    product: item.product,
+    sku: item.sku,
+    price: item.myCost,
+    currency: item.myCostCurrency ?? "EUR",
+    rrp: null,
+    moq: null,
+    leadTimeDays: null,
+    paymentTerms: null,
+    region: null,
+    incoterm: null,
+    marketOrigin: null,
+    availability: null,
+    stockQty: null,
+    notes: "Your own buying cost, uploaded with the wanted list - not saved to the offers database.",
+    sourceFileUrl: null,
+    createdAt: new Date().toISOString(),
+  };
+}
+
 function downloadCsv(filename: string, csv: string) {
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
@@ -136,7 +179,9 @@ function buildResultsCsv(results: InquiryResultRow[]): string {
   ];
   const lines = [headers.join(",")];
 
-  for (const { item, offers } of results) {
+  for (const { item, offers: matched } of results) {
+    const own = myCostOffer(item);
+    const offers = own ? [...matched, own] : matched;
     if (offers.length === 0) {
       lines.push(
         [
@@ -255,7 +300,12 @@ export default function InquiryPage() {
   const getQuoteLine = (i: number, offers: Offer[], item: InquiryItem): QuoteLineState => {
     const existing = quoteLines[i];
     if (existing) return existing;
-    const best = offers.slice().sort((a, b) => a.price - b.price)[0];
+    // Prefer the uploaded buying cost as the default cost basis when present
+    // - it's a real cost the user already has in hand for this exact quote,
+    // which beats guessing from whichever matched offer happens to be
+    // cheapest. Falls back to the cheapest matched offer otherwise.
+    const own = myCostOffer(item);
+    const best = own ?? offers.slice().sort((a, b) => a.price - b.price)[0];
     return {
       offerId: best?.id ?? null,
       sellPrice: item.targetPrice !== null ? String(item.targetPrice) : "",
@@ -308,9 +358,11 @@ export default function InquiryPage() {
     setQuoteLines((prev) => {
       const next = { ...prev };
       response.results.forEach((r, i) => {
-        if (r.offers.length === 0) return;
+        const own = myCostOffer(r.item);
+        const options = own ? [...r.offers, own] : r.offers;
+        if (options.length === 0) return;
         const line = getQuoteLine(i, r.offers, r.item);
-        const sorted = r.offers.slice().sort((a, b) => a.price - b.price);
+        const sorted = options.slice().sort((a, b) => a.price - b.price);
         const costOffer = sorted.find((o) => o.id === line.offerId) ?? sorted[0];
         if (!costOffer) return;
         const costEur = toEur(costOffer.price, costOffer.currency, eurRates);
@@ -337,10 +389,16 @@ export default function InquiryPage() {
         const line = getQuoteLine(i, r.offers, r.item);
         const sellNum = parseFloat(line.sellPrice);
         if (!line.sellPrice.trim() || Number.isNaN(sellNum)) return null;
-        const costOffer = r.offers.find((o) => o.id === line.offerId);
+        const own = myCostOffer(r.item);
+        const costOffer =
+          r.offers.find((o) => o.id === line.offerId) ?? (own?.id === line.offerId ? own : undefined);
         if (!costOffer) return null;
         return {
-          offerId: costOffer.id,
+          // The uploaded "my cost" row isn't a real offers-table row, so it
+          // has no valid offer_id to save - offer_id is a foreign key, and
+          // sending its negative sentinel id would fail the insert. supplier/
+          // cost/currency are still captured directly on the quote item.
+          offerId: costOffer.id === MY_COST_OFFER_ID ? null : costOffer.id,
           brand: r.item.brand,
           product: r.item.product,
           sku: r.item.sku,
@@ -466,15 +524,23 @@ export default function InquiryPage() {
     downloadCsv(`inquiry-quote-${new Date().toISOString().slice(0, 10)}.csv`, buildResultsCsv(response.results));
   };
 
+  // A line with an uploaded buying cost but no matched supplier offer is
+  // still quotable off that cost, so it counts as "matched" here too - not
+  // just lines the DB-matching route found a supplier for.
+  const hasCostBasis = (r: InquiryResultRow): boolean => r.offers.length > 0 || r.item.myCost !== null;
+
   const filteredResults = response
     ? response.results
         .map((r, index) => ({ ...r, index }))
         .filter((r) => {
-          if (filter === "matched") return r.offers.length > 0;
-          if (filter === "unmatched") return r.offers.length === 0;
+          if (filter === "matched") return hasCostBasis(r);
+          if (filter === "unmatched") return !hasCostBasis(r);
           return true;
         })
     : [];
+
+  const matchedCount = response ? response.results.filter(hasCostBasis).length : 0;
+  const unmatchedCount = response ? response.results.length - matchedCount : 0;
 
   const quotableCount = response
     ? response.results.filter((r, i) => {
@@ -502,7 +568,10 @@ export default function InquiryPage() {
           <p className="mt-1 text-xs text-gray-500">
             Excel (.xlsx/.xls), with or without column headers. If the file has a price column,
             it&apos;s auto-detected as the client&apos;s target price and pre-fills the sell price
-            and margin below - no manual entry needed.
+            and margin below - no manual entry needed. If it also has a column for your own buying
+            cost (e.g. &quot;Cost&quot;, &quot;Buying cost&quot;, &quot;Purchase price&quot;), that gets
+            picked up too and used as the default cost basis - handy for a same-day margin check
+            when you already have your own numbers, matched offers or not.
           </p>
           <input
             type="file"
@@ -652,8 +721,8 @@ export default function InquiryPage() {
                   {f === "all"
                     ? `All (${response.summary.total})`
                     : f === "matched"
-                      ? `Matched (${response.summary.matched})`
-                      : `No match (${response.summary.unmatched})`}
+                      ? `Matched (${matchedCount})`
+                      : `No match (${unmatchedCount})`}
                 </button>
               ))}
             </div>
@@ -700,11 +769,17 @@ export default function InquiryPage() {
 
           <div className="space-y-6">
             {filteredResults.map(({ item, offers, index }) => {
-              const sorted = offers.slice().sort((a, b) => a.price - b.price);
+              // "My cost" (see myCostOffer above) sits alongside any matched
+              // supplier offers as just another selectable cost-basis row -
+              // sorted, radio-selected, and margin-computed the same way.
+              const own = myCostOffer(item);
+              const costOptions = own ? [...offers, own] : offers;
+              const sorted = costOptions.slice().sort((a, b) => a.price - b.price);
               const bestPrice = sorted[0]?.price;
               const line = getQuoteLine(index, offers, item);
               const costOffer = sorted.find((o) => o.id === line.offerId);
               const { costEur, sellEur, marginEur, marginPct } = computeMargin(costOffer, line);
+              const matchedOfferCount = offers.length;
               return (
                 <div key={index} className="rounded-xl border border-gray-200 bg-white p-5">
                   <div className="mb-3 flex items-baseline justify-between gap-3">
@@ -714,7 +789,8 @@ export default function InquiryPage() {
                     </h2>
                     <span className="text-xs text-gray-400">
                       {item.qty ? `Qty ${item.qty} · ` : ""}
-                      {sorted.length} offer{sorted.length === 1 ? "" : "s"}
+                      {matchedOfferCount} offer{matchedOfferCount === 1 ? "" : "s"}
+                      {own ? " · your cost uploaded" : ""}
                     </span>
                   </div>
 
@@ -742,10 +818,15 @@ export default function InquiryPage() {
                           {sorted.map((o) => {
                             const isBest = o.price === bestPrice && sorted.length > 1;
                             const margin = o.rrp && o.rrp > 0 ? ((o.rrp - o.price) / o.rrp) * 100 : null;
+                            // The uploaded "my cost" row isn't a real offers-
+                            // table row - it can't be opened/edited via
+                            // EditOfferModal (there's nothing to PUT), and it
+                            // has no real "added" date, just today.
+                            const isOwnCost = o.id === MY_COST_OFFER_ID;
                             return (
                               <tr
                                 key={o.id}
-                                className={`border-b border-gray-100 last:border-0 ${isBest ? "bg-green-50" : ""}`}
+                                className={`border-b border-gray-100 last:border-0 ${isBest ? "bg-green-50" : ""} ${isOwnCost ? "bg-blue-50" : ""}`}
                               >
                                 <td className="py-2 pr-4">
                                   <input
@@ -764,19 +845,19 @@ export default function InquiryPage() {
                                   )}
                                 </td>
                                 <td
-                                  onClick={() => setEditingOffer(o)}
-                                  title={offerTooltip(o)}
-                                  className="cursor-pointer py-2 pr-4 font-medium text-gray-900 hover:underline"
+                                  onClick={isOwnCost ? undefined : () => setEditingOffer(o)}
+                                  title={isOwnCost ? "Your own uploaded buying cost - not a stored offer" : offerTooltip(o)}
+                                  className={`py-2 pr-4 font-medium text-gray-900 ${isOwnCost ? "" : "cursor-pointer hover:underline"}`}
                                 >
                                   {o.price.toFixed(2)} {o.currency}
                                 </td>
                                 <td
-                                  title={new Date(o.createdAt).toLocaleString()}
+                                  title={isOwnCost ? undefined : new Date(o.createdAt).toLocaleString()}
                                   className={`py-2 pr-4 whitespace-nowrap ${
-                                    isToday(o.createdAt) ? "text-blue-500" : "text-gray-500"
+                                    isOwnCost ? "text-gray-400" : isToday(o.createdAt) ? "text-blue-500" : "text-gray-500"
                                   }`}
                                 >
-                                  {shortDate(o.createdAt)}
+                                  {isOwnCost ? "Your input" : shortDate(o.createdAt)}
                                 </td>
                                 <td className="py-2 pr-4">{margin !== null ? `${margin.toFixed(0)}%` : "—"}</td>
                                 <td className="py-2 pr-4">{o.moq ?? "—"}</td>
@@ -784,12 +865,14 @@ export default function InquiryPage() {
                                 <td className="py-2 pr-4">{o.paymentTerms ?? "—"}</td>
                                 <td className="py-2 pr-4">{o.region ?? "—"}</td>
                                 <td className="py-2 pr-4 text-right">
-                                  <button
-                                    onClick={() => setEditingOffer(o)}
-                                    className="text-xs text-gray-500 hover:underline"
-                                  >
-                                    Edit
-                                  </button>
+                                  {!isOwnCost && (
+                                    <button
+                                      onClick={() => setEditingOffer(o)}
+                                      className="text-xs text-gray-500 hover:underline"
+                                    >
+                                      Edit
+                                    </button>
+                                  )}
                                 </td>
                               </tr>
                             );

@@ -17,6 +17,7 @@ export type InquiryColumnRole =
   | "sku"
   | "qty"
   | "targetPrice"
+  | "cost"
   | "currency"
   | "extra";
 
@@ -30,6 +31,12 @@ export const INQUIRY_ROLE_LABELS: Record<InquiryColumnRole, string> = {
   // be uploaded and pre-fill the sell-price field on every matched item
   // instead of typing it in by hand (see buildInquiryItems below).
   targetPrice: "Target price (client's)",
+  // Your own buying cost for this line, if you already know it (e.g. from a
+  // supplier invoice or a quote you already have in hand) - lets a whole
+  // sourcing list double as a margin check without needing a matching offer
+  // already on file. Same currency column applies to this as to the target
+  // price (see buildInquiryItems below).
+  cost: "Your buying cost",
   currency: "Currency",
   extra: "Extra (kept as note)",
 };
@@ -58,14 +65,30 @@ const KEYWORDS: Partial<Record<InquiryColumnRole, string[]>> = {
     "precio",
     "price",
   ],
+  // Compound phrases only, checked before targetPrice below - targetPrice's
+  // bare "price" keyword would otherwise swallow a "Cost price"/"Purchase
+  // price" column before this list gets a chance to match it.
+  cost: [
+    "buying cost",
+    "buy cost",
+    "my cost",
+    "our cost",
+    "cost price",
+    "purchase price",
+    "landed cost",
+    "unit cost",
+    "coste",
+    "costo",
+    "cost",
+  ],
   product: ["product", "description", "name", "article", "item", "title"],
 };
 
 // Product is checked last since it's the most generic keyword set and would
-// otherwise swallow columns that are actually SKU/brand/qty/price/currency.
-// currency/targetPrice are checked before the generic product fallback but
-// after the more specific sku/brand/qty roles.
-const ROLE_PRIORITY: InquiryColumnRole[] = ["sku", "brand", "qty", "currency", "targetPrice", "product"];
+// otherwise swallow columns that are actually SKU/brand/qty/price/cost/
+// currency. cost is checked before targetPrice so a "Cost price" column
+// doesn't get swallowed by targetPrice's generic bare "price" keyword.
+const ROLE_PRIORITY: InquiryColumnRole[] = ["sku", "brand", "qty", "currency", "cost", "targetPrice", "product"];
 
 function normalize(h: string): string {
   return h
@@ -150,6 +173,14 @@ export type InquiryItem = {
   // a whole list doesn't mean typing in every price by hand.
   targetPrice: number | null;
   targetCurrency: string | null;
+  // Your own buying cost for this line, if the uploaded list had a cost
+  // column - surfaces as a selectable "My cost" cost-basis on the Inquiry
+  // results (see myCostOffer() in app/inquiry/page.tsx), so a line can be
+  // quoted/margin-checked even with no matching offer on file. Shares the
+  // same currency column as targetPrice above (one currency per row is the
+  // common case) unless costCurrency was set from a dedicated column.
+  myCost: number | null;
+  myCostCurrency: string | null;
 };
 
 export type BuildInquiryResult = {
@@ -171,6 +202,7 @@ export function buildInquiryItems(
   const skuCol = firstByRole("sku");
   const qtyCol = firstByRole("qty");
   const targetPriceCol = firstByRole("targetPrice");
+  const costCol = firstByRole("cost");
   const currencyCol = firstByRole("currency");
 
   const dataRows = headerRowIndex >= 0 ? rows.slice(headerRowIndex + 1) : rows;
@@ -198,6 +230,12 @@ export function buildInquiryItems(
     const targetPrice = targetPriceCleaned ? Number(targetPriceCleaned) : null;
     const targetCurrency = currencyCol ? r[currencyCol.index]?.trim().toUpperCase() || null : null;
 
+    // Same tolerant cleanup as targetPrice above - cost cells often carry
+    // currency symbols/thousands separators too.
+    const costRaw = costCol ? r[costCol.index]?.trim() : "";
+    const costCleaned = costRaw ? costRaw.replace(/[^\d.,]/g, "").replace(",", ".") : "";
+    const myCost = costCleaned ? Number(costCleaned) : null;
+
     items.push({
       raw: r.join(" "),
       brand,
@@ -206,6 +244,8 @@ export function buildInquiryItems(
       qty: qty !== null && Number.isFinite(qty) ? qty : null,
       targetPrice: targetPrice !== null && Number.isFinite(targetPrice) ? targetPrice : null,
       targetCurrency,
+      myCost: myCost !== null && Number.isFinite(myCost) ? myCost : null,
+      myCostCurrency: targetCurrency,
     });
   });
 
