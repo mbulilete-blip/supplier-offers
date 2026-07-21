@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { Offer } from "@/lib/types";
 import EditOfferModal from "@/components/EditOfferModal";
-import { EurRates, formatEur, SUPPORTED_CURRENCIES, toEur } from "@/lib/currency";
+import { EurRates, formatEur, fromEur, SUPPORTED_CURRENCIES, toEur } from "@/lib/currency";
 import {
   InquiryColumnMapping,
   InquiryColumnRole,
@@ -228,6 +228,10 @@ export default function InquiryPage() {
 
   // Keyed by index into response.results.
   const [quoteLines, setQuoteLines] = useState<Record<number, QuoteLineState>>({});
+  // Target margin % used by the "Apply to all matched items" bulk-fill
+  // button below - not persisted per line, just the input driving the action.
+  const [targetMarginPct, setTargetMarginPct] = useState("");
+  const [marginApplyError, setMarginApplyError] = useState<string | null>(null);
   const [customerName, setCustomerName] = useState("");
   const [customerType, setCustomerType] = useState(CUSTOMER_TYPES[0]);
   const [customerRegion, setCustomerRegion] = useState("");
@@ -277,6 +281,47 @@ export default function InquiryPage() {
     const marginEur = costEur !== null && sellEur !== null ? sellEur - costEur : null;
     const marginPct = marginEur !== null && sellEur ? (marginEur / sellEur) * 100 : null;
     return { costEur, sellEur, marginEur, marginPct };
+  };
+
+  // Bulk-fills every matched item's sell price from a single target margin %,
+  // costed off each line's currently-selected offer (defaults to the
+  // cheapest, same as getQuoteLine). Matches the margin-on-sell-price
+  // convention computeMargin uses above (marginPct = (sell - cost) / sell *
+  // 100), so solving for sell given cost and a target margin m% is
+  // sell = cost / (1 - m/100) - not cost * (1 + m/100), which would be
+  // markup-on-cost instead and give a different number. Overwrites any sell
+  // price already entered, including ones seeded from the client's own
+  // target-price column, since that's the point of a one-click bulk apply.
+  const handleApplyMargin = () => {
+    if (!response) return;
+    setMarginApplyError(null);
+    const marginNum = parseFloat(targetMarginPct);
+    if (targetMarginPct.trim() === "" || Number.isNaN(marginNum)) {
+      setMarginApplyError("Enter a target margin percentage first.");
+      return;
+    }
+    if (marginNum >= 100) {
+      setMarginApplyError("Margin must be less than 100%.");
+      return;
+    }
+
+    setQuoteLines((prev) => {
+      const next = { ...prev };
+      response.results.forEach((r, i) => {
+        if (r.offers.length === 0) return;
+        const line = getQuoteLine(i, r.offers, r.item);
+        const sorted = r.offers.slice().sort((a, b) => a.price - b.price);
+        const costOffer = sorted.find((o) => o.id === line.offerId) ?? sorted[0];
+        if (!costOffer) return;
+        const costEur = toEur(costOffer.price, costOffer.currency, eurRates);
+        const sellEur = costEur / (1 - marginNum / 100);
+        const sellCurrency = line.sellCurrency || costOffer.currency;
+        const sellNative = fromEur(sellEur, sellCurrency, eurRates);
+        next[i] = { ...line, sellPrice: sellNative.toFixed(2), sellCurrency };
+      });
+      return next;
+    });
+    setSavedQuoteId(null);
   };
 
   const handleSaveQuote = async () => {
@@ -618,6 +663,32 @@ export default function InquiryPage() {
             >
               Export results (CSV)
             </button>
+          </div>
+
+          <div className="flex flex-wrap items-end gap-3 rounded-lg border border-blue-200 bg-blue-50 p-3">
+            <label className="block text-xs font-medium text-blue-900">
+              Target margin %
+              <input
+                className="input mt-1 w-28"
+                type="number"
+                inputMode="decimal"
+                value={targetMarginPct}
+                onChange={(e) => setTargetMarginPct(e.target.value)}
+                placeholder="e.g. 30"
+              />
+            </label>
+            <button
+              onClick={handleApplyMargin}
+              className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+            >
+              Apply to all matched items
+            </button>
+            <p className="text-xs text-blue-700">
+              Fills the sell price on every matched item from its currently-selected cost offer, at
+              this margin (as % of sell price, same as shown below) - overwrites any sell price
+              already entered.
+            </p>
+            {marginApplyError && <p className="w-full text-xs text-red-600">{marginApplyError}</p>}
           </div>
 
           {response.truncated && (

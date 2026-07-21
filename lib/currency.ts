@@ -84,6 +84,16 @@ export function toEur(amount: number, currency: string | null | undefined, rates
   return amount * rate;
 }
 
+// Inverse of toEur - converts a EUR amount into the given native currency.
+// Used wherever a target figure is computed in EUR (e.g. a desired margin)
+// but needs to be shown/entered back in whatever currency the user is
+// quoting in.
+export function fromEur(amountEur: number, currency: string | null | undefined, rates: EurRates): number {
+  const key = (currency ?? "EUR").trim().toUpperCase();
+  const rate = rates[key] ?? 1;
+  return amountEur / rate;
+}
+
 // Formats a money amount European-style - "." as the thousands separator,
 // "," as the decimal separator (e.g. "197.639,26") - matching how EUR
 // figures are conventionally written in this app's markets, rather than the
