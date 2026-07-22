@@ -123,6 +123,18 @@ export default function DashboardPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchInput]);
 
+  // Seed the search box from a `?search=` URL param on first load - lets
+  // another app (e.g. Beauty Hub's global search, matching on SKU/EAN) deep
+  // link straight into a pre-filtered view instead of landing on the
+  // unfiltered dashboard. Read client-side only (window isn't available
+  // during server render).
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const q = params.get("search");
+    if (q) setSearchInput(q);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const loadOverview = () => {
     fetch("/api/dashboard/stats")
       .then((r) => r.json())
