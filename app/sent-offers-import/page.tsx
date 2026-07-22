@@ -254,7 +254,8 @@ export default function SentOffersImportPage() {
           <h1 className="text-xl font-semibold">Import Sent Offers</h1>
           <p className="mt-1 text-sm text-gray-500">
             Paste or upload prices already offered to clients by SKU/EAN - client, product/EAN, and price is all
-            you need. Cost, supplier, and RRP are filled in automatically from the current price book.
+            you need (add a quantity column too if you have one). Cost, supplier, and RRP are filled in
+            automatically from the current price book.
           </p>
         </div>
         <Link href="/quotes" className="text-sm text-gray-500 hover:text-gray-900">
@@ -265,11 +266,11 @@ export default function SentOffersImportPage() {
       <div className="rounded-xl border border-gray-200 bg-white p-6 space-y-4">
         <div>
           <label className="block text-sm font-medium text-gray-700">…paste rows</label>
-          <p className="mt-1 text-xs text-gray-500">One row per line - client, brand/product, EAN, price. Straight from Excel works fine.</p>
+          <p className="mt-1 text-xs text-gray-500">One row per line - client, brand/product, EAN, price, qty (optional). Straight from Excel works fine.</p>
           <textarea
             className="input mt-2 w-full font-mono text-xs"
             rows={5}
-            placeholder={"Client, Brand, Product, EAN, Price\nNotino, Byoma, Milky Toner 200ml, 8697991005678, 9.90"}
+            placeholder={"Client, Brand, Product, EAN, Price, Qty\nNotino, Byoma, Milky Toner 200ml, 8697991005678, 9.90, 500"}
             value={pasteText}
             onChange={(e) => setPasteText(e.target.value)}
           />
@@ -434,6 +435,7 @@ export default function SentOffersImportPage() {
                   <th className="px-3 py-2 text-left">Client</th>
                   <th className="px-3 py-2 text-left">Product</th>
                   <th className="px-3 py-2 text-left">SKU</th>
+                  <th className="px-3 py-2 text-left">Qty</th>
                   <th className="px-3 py-2 text-left">Price sent</th>
                   <th className="px-3 py-2 text-left">Cost basis</th>
                   <th className="px-3 py-2 text-left">RRP</th>
@@ -455,6 +457,7 @@ export default function SentOffersImportPage() {
                         {r.item.product}
                       </td>
                       <td className="px-3 py-2 text-xs text-gray-500">{r.item.sku ?? "—"}</td>
+                      <td className="px-3 py-2 text-xs text-gray-500">{r.item.qty ?? "—"}</td>
                       <td className="px-3 py-2">
                         {r.item.price.toFixed(2)} {sellCurrency}
                       </td>
