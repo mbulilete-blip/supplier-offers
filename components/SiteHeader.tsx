@@ -38,6 +38,9 @@ export default function SiteHeader() {
           <Link href="/quotes" className="hover:text-gray-900">
             Sales Pipeline
           </Link>
+          <Link href="/sent-offers-import" className="hover:text-gray-900">
+            Import Sent Offers
+          </Link>
           <Link href="/history" className="hover:text-gray-900">
             History
           </Link>
