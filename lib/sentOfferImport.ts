@@ -133,7 +133,13 @@ export type BuildSentOfferResult = {
 export function buildSentOfferItems(
   rows: string[][],
   headerRowIndex: number,
-  mapping: SentOfferColumnMapping[]
+  mapping: SentOfferColumnMapping[],
+  // Some files are already scoped to one client (e.g. an export/selection
+  // sent to a single account) and have no per-row client column at all -
+  // rather than force one in, a single client name typed once in the UI
+  // covers every row. A per-row client column, when present, always wins
+  // over this for that row.
+  defaultClient?: string
 ): BuildSentOfferResult {
   const errors: BuildSentOfferResult["errors"] = [];
   const items: SentOfferItem[] = [];
@@ -153,7 +159,7 @@ export function buildSentOfferItems(
     const line = (headerRowIndex >= 0 ? headerRowIndex + 2 : 1) + i;
     if (r.every((c) => c.trim() === "")) return;
 
-    const client = clientCol ? r[clientCol.index]?.trim() : "";
+    const client = (clientCol ? r[clientCol.index]?.trim() : "") || defaultClient?.trim() || "";
     if (!client) {
       errors.push({ line, message: "No client name found — row skipped." });
       return;

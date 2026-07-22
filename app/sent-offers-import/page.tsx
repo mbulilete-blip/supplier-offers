@@ -20,7 +20,6 @@ type MatchResponse = { results: MatchResultRow[]; summary: { total: number; matc
 type SavedQuote = { client: string; quoteId: number; items: number };
 
 const ROLE_OPTIONS: SentOfferColumnRole[] = ["client", "product", "brand", "sku", "price", "currency", "qty", "ignore"];
-const REQUIRED_ROLES: SentOfferColumnRole[] = ["client", "price"];
 
 async function saveByClient(
   results: MatchResultRow[],
@@ -72,6 +71,11 @@ export default function SentOffersImportPage() {
   const [mapping, setMapping] = useState<SentOfferColumnMapping[]>([]);
   const [readError, setReadError] = useState<string | null>(null);
   const [pasteText, setPasteText] = useState("");
+
+  // Some files (e.g. a selection/quantity export for one account) have no
+  // per-row client column at all - this covers every row in that case. A
+  // per-row "Client" column, if the file has one, always wins over this.
+  const [defaultClient, setDefaultClient] = useState("");
 
   // Off by default - the whole point of the quick path is not showing this.
   // Forced on automatically below if auto-detection couldn't find a
@@ -131,7 +135,8 @@ export default function SentOffersImportPage() {
     setMapping(detectedMapping);
     const detectedRoles = new Set(detectedMapping.map((m) => m.role));
     const hasProductOrSku = detectedRoles.has("product") || detectedRoles.has("sku");
-    const missingRequired = REQUIRED_ROLES.some((r) => !detectedRoles.has(r)) || !hasProductOrSku;
+    const hasClient = detectedRoles.has("client") || defaultClient.trim() !== "";
+    const missingRequired = !hasClient || !detectedRoles.has("price") || !hasProductOrSku;
     setShowMappingEditor(missingRequired);
     resetResults();
   };
@@ -163,10 +168,10 @@ export default function SentOffersImportPage() {
     resetResults();
   };
 
-  const preview = rows.length > 0 ? buildSentOfferItems(rows, headerRowIndex, mapping) : null;
+  const preview = rows.length > 0 ? buildSentOfferItems(rows, headerRowIndex, mapping, defaultClient) : null;
   const mappingRoles = new Set(mapping.map((m) => m.role));
-  const mappingReady =
-    REQUIRED_ROLES.every((r) => mappingRoles.has(r)) && (mappingRoles.has("product") || mappingRoles.has("sku"));
+  const hasClient = mappingRoles.has("client") || defaultClient.trim() !== "";
+  const mappingReady = hasClient && mappingRoles.has("price") && (mappingRoles.has("product") || mappingRoles.has("sku"));
 
   // Clears the loaded input (rows/mapping/file) so the form is ready for the
   // next batch - deliberately does NOT touch quickResult/saveSummary, so a
@@ -265,6 +270,24 @@ export default function SentOffersImportPage() {
 
       <div className="rounded-xl border border-gray-200 bg-white p-6 space-y-4">
         <div>
+          <label className="block text-sm font-medium text-gray-700">Client for this batch</label>
+          <p className="mt-1 text-xs text-gray-500">
+            Only needed if your file doesn&apos;t already have a Client column (e.g. a single-account selection
+            export) - if it does, that column wins for each row regardless of what you type here.
+          </p>
+          <input
+            type="text"
+            value={defaultClient}
+            onChange={(e) => {
+              setDefaultClient(e.target.value);
+              resetResults();
+            }}
+            placeholder="e.g. Notino"
+            className="input mt-2 w-full max-w-xs"
+          />
+        </div>
+
+        <div className="border-t border-gray-100 pt-4">
           <label className="block text-sm font-medium text-gray-700">…paste rows</label>
           <p className="mt-1 text-xs text-gray-500">One row per line - client, brand/product, EAN, price, qty (optional). Straight from Excel works fine.</p>
           <textarea
@@ -298,8 +321,8 @@ export default function SentOffersImportPage() {
       {rows.length > 0 && !showMappingEditor && (
         <div className="rounded-xl border border-gray-200 bg-white p-6 space-y-3">
           <p className="text-sm text-gray-700">
-            {preview?.items.length ?? 0} row(s) ready - client, {mappingRoles.has("sku") ? "EAN" : "product"}, and
-            price all detected.
+            {preview?.items.length ?? 0} row(s) ready - client ({mappingRoles.has("client") ? "column" : `"${defaultClient}"`}),{" "}
+            {mappingRoles.has("sku") ? "EAN" : "product"}, and price all set.
             {preview && preview.errors.length > 0 ? ` ${preview.errors.length} row(s) skipped (see below).` : ""}
           </p>
           <div className="flex flex-wrap items-center gap-3">
@@ -338,7 +361,9 @@ export default function SentOffersImportPage() {
           <p className="text-xs text-gray-500">
             {mappingReady
               ? "Looks good - collapse this once you're happy with the mapping."
-              : "Couldn't auto-detect everything needed (client, price, and a product name or EAN) - set the missing ones below."}
+              : hasClient
+                ? "Couldn't auto-detect everything needed (price, and a product name or EAN) - set the missing ones below."
+                : "No client column found and no client typed above - either set one below or fill in \"Client for this batch\" above."}
           </p>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
