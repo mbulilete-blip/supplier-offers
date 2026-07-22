@@ -380,6 +380,26 @@ export default function MatrixPage() {
     loadBrands();
   }, []);
 
+  // Deep-link support: once brands have loaded, honor a `?brand=` URL param
+  // (used by Beauty Hub's global search - it knows an offer's raw brand
+  // string, not its canonical grouped name) by finding whichever group it
+  // belongs to and selecting that. Only auto-applies once so it doesn't
+  // fight a manual dropdown change afterward.
+  const appliedBrandParam = useRef(false);
+  useEffect(() => {
+    if (appliedBrandParam.current || brands.length === 0) return;
+    const raw = new URLSearchParams(window.location.search).get("brand");
+    if (!raw) { appliedBrandParam.current = true; return; }
+    const needle = raw.trim().toLowerCase();
+    const match = brands.find(
+      (g) =>
+        g.canonical.toLowerCase() === needle ||
+        g.variants.some((v) => v.brand.toLowerCase() === needle)
+    );
+    if (match) setBrand(match.canonical);
+    appliedBrandParam.current = true;
+  }, [brands]);
+
   const startBrandRename = () => {
     if (!brand) return;
     setBrandRenameValue(brand);
