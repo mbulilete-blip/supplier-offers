@@ -564,7 +564,16 @@ export default function MatrixPage() {
     const productsSorted = Array.from(productMap.entries())
       .map(([key, v]) => ({ key, ...v }))
       .sort((a, b) => a.product.localeCompare(b.product));
-    const suppliersSorted = Array.from(supplierSet).sort();
+    // Most-recently-updated supplier leads (leftmost column), not alphabetical
+    // - a fresh price import should always surface as the first thing you see
+    // scanning left to right. Ties (e.g. two suppliers both updated "today")
+    // fall back to name so the order doesn't jitter between renders.
+    const suppliersSorted = Array.from(supplierSet).sort((a, b) => {
+      const aMs = new Date(lastUpdated.get(a) ?? 0).getTime();
+      const bMs = new Date(lastUpdated.get(b) ?? 0).getTime();
+      if (bMs !== aMs) return bMs - aMs;
+      return a.localeCompare(b);
+    });
 
     // "Best supplier" tally for the summary panel: for every product quoted
     // by more than one supplier (a "contested" product - anything with just
@@ -1439,7 +1448,8 @@ export default function MatrixPage() {
           to compare against, so they're left plain. Each
           price shows its discount vs that row&apos;s RRP underneath - red means the price is
           above RRP. &quot;Updated&quot; under each supplier is when their most recent price for
-          this brand was added. Click any price to edit that offer, or hover the product name to
+          this brand was added, and columns are ordered by that date - most recently updated
+          supplier first (left), oldest last (right). Click any price to edit that offer, or hover the product name to
           see it in full. Next to a supplier name, ✎ renames it everywhere (across every brand,
           not just this one), and 🗑 deletes all of that supplier&apos;s offers for this brand
           only. The Availability buttons above the table filter to products with at least one
