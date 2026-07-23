@@ -77,11 +77,10 @@ export default function SentOffersImportPage() {
   // per-row "Client" column, if the file has one, always wins over this.
   const [defaultClient, setDefaultClient] = useState("");
 
-  // Off by default - the whole point of the quick path is not showing this.
-  // Forced on automatically below if auto-detection couldn't find a
-  // required column, since guessing wrong on client/price isn't safe to
-  // silently proceed with.
-  const [showMappingEditor, setShowMappingEditor] = useState(false);
+  // Off by default - most uploads are logging a sale price only, nothing to
+  // do with cost. When on, every row gets matched against the price book
+  // (by SKU/EAN) to snapshot a supplier/cost/RRP alongside the sale price.
+  const [matchForCost, setMatchForCost] = useState(false);
   const [reviewFirst, setReviewFirst] = useState(false);
 
   const [eurRates, setEurRates] = useState<EurRates>({ EUR: 1 });
@@ -108,7 +107,13 @@ export default function SentOffersImportPage() {
   // here too).
   const [quickImporting, setQuickImporting] = useState(false);
   const [quickError, setQuickError] = useState<string | null>(null);
-  const [quickResult, setQuickResult] = useState<{ saved: SavedQuote[]; matched: number; unmatched: number; skipped: number } | null>(null);
+  const [quickResult, setQuickResult] = useState<{
+    saved: SavedQuote[];
+    matchedCost: boolean;
+    matched: number;
+    unmatched: number;
+    skipped: number;
+  } | null>(null);
 
   const resetResults = () => {
     setResponse(null);
@@ -133,11 +138,6 @@ export default function SentOffersImportPage() {
     setRows(grid);
     setHeaderRowIndex(hIdx >= 0 ? hIdx : -1);
     setMapping(detectedMapping);
-    const detectedRoles = new Set(detectedMapping.map((m) => m.role));
-    const hasProductOrSku = detectedRoles.has("product") || detectedRoles.has("sku");
-    const hasClient = detectedRoles.has("client") || defaultClient.trim() !== "";
-    const missingRequired = !hasClient || !detectedRoles.has("price") || !hasProductOrSku;
-    setShowMappingEditor(missingRequired);
     resetResults();
   };
 
@@ -181,28 +181,40 @@ export default function SentOffersImportPage() {
     setMapping([]);
     setFileName(null);
     setPasteText("");
-    setShowMappingEditor(false);
   };
 
-  // Quick path - match then save immediately, cheapest offer per row.
+  // Quick path - save immediately. If matchForCost is on, matches every row
+  // against the price book first and picks the cheapest as cost basis;
+  // otherwise saves sell price/qty only, with no cost/supplier/RRP at all.
   const handleQuickImport = async () => {
     if (!preview || preview.items.length === 0) return;
     setQuickImporting(true);
     setQuickError(null);
     setQuickResult(null);
     try {
-      const res = await fetch("/api/inquiry/match", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ items: preview.items }),
-      });
-      const data = (await res.json()) as MatchResponse;
-      if (!res.ok) throw new Error((data as unknown as { error?: string }).error ?? "Failed to match items.");
-      const saved = await saveByClient(data.results, (_i, offers) => offers[0] ?? null);
+      let saved: SavedQuote[];
+      let matched = 0;
+      let unmatched = preview.items.length;
+      if (matchForCost) {
+        const res = await fetch("/api/inquiry/match", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ items: preview.items }),
+        });
+        const data = (await res.json()) as MatchResponse;
+        if (!res.ok) throw new Error((data as unknown as { error?: string }).error ?? "Failed to match items.");
+        saved = await saveByClient(data.results, (_i, offers) => offers[0] ?? null);
+        matched = data.summary.matched;
+        unmatched = data.summary.unmatched;
+      } else {
+        const results: MatchResultRow[] = preview.items.map((item) => ({ item, offers: [] }));
+        saved = await saveByClient(results, () => null);
+      }
       setQuickResult({
         saved,
-        matched: data.summary.matched,
-        unmatched: data.summary.unmatched,
+        matchedCost: matchForCost,
+        matched,
+        unmatched,
         skipped: preview.errors.length,
       });
       clearInputs();
@@ -259,8 +271,8 @@ export default function SentOffersImportPage() {
           <h1 className="text-xl font-semibold">Import Sent Offers</h1>
           <p className="mt-1 text-sm text-gray-500">
             Paste or upload prices already offered to clients by SKU/EAN - client, product/EAN, and price is all
-            you need (add a quantity column too if you have one). Cost, supplier, and RRP are filled in
-            automatically from the current price book.
+            you need (add a quantity column too if you have one). Cost, supplier, and RRP from the price book are
+            optional - off unless you turn them on below.
           </p>
         </div>
         <Link href="/quotes" className="text-sm text-gray-500 hover:text-gray-900">
@@ -318,49 +330,12 @@ export default function SentOffersImportPage() {
         </div>
       </div>
 
-      {rows.length > 0 && !showMappingEditor && (
-        <div className="rounded-xl border border-gray-200 bg-white p-6 space-y-3">
-          <p className="text-sm text-gray-700">
-            {preview?.items.length ?? 0} row(s) ready - client ({mappingRoles.has("client") ? "column" : `"${defaultClient}"`}),{" "}
-            {mappingRoles.has("sku") ? "EAN" : "product"}, and price all set.
-            {preview && preview.errors.length > 0 ? ` ${preview.errors.length} row(s) skipped (see below).` : ""}
-          </p>
-          <div className="flex flex-wrap items-center gap-3">
-            <button
-              onClick={handleQuickImport}
-              disabled={quickImporting || !preview || preview.items.length === 0}
-              className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-700 disabled:opacity-50"
-            >
-              {quickImporting ? "Importing…" : `Import ${preview?.items.length ?? 0} row(s)`}
-            </button>
-            <button onClick={() => setShowMappingEditor(true)} className="text-sm text-gray-500 hover:text-gray-900">
-              Columns don&apos;t look right? Adjust them
-            </button>
-            <label className="flex items-center gap-1.5 text-sm text-gray-500 ml-auto">
-              <input type="checkbox" checked={reviewFirst} onChange={(e) => setReviewFirst(e.target.checked)} />
-              Review matches before saving
-            </label>
-          </div>
-          {reviewFirst && (
-            <button
-              onClick={runMatch}
-              disabled={matching || !preview || preview.items.length === 0}
-              className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:border-gray-400"
-            >
-              {matching ? "Matching…" : "Match & review instead"}
-            </button>
-          )}
-          {matchError && <p className="text-sm text-red-600">{matchError}</p>}
-          {quickError && <p className="text-sm text-red-600">{quickError}</p>}
-        </div>
-      )}
-
-      {rows.length > 0 && showMappingEditor && (
+      {rows.length > 0 && (
         <div className="rounded-xl border border-gray-200 bg-white p-6 space-y-3">
           <h2 className="text-sm font-semibold text-gray-800">Confirm columns</h2>
           <p className="text-xs text-gray-500">
             {mappingReady
-              ? "Looks good - collapse this once you're happy with the mapping."
+              ? `${preview?.items.length ?? 0} row(s) ready - check the mapping below before importing.`
               : hasClient
                 ? "Couldn't auto-detect everything needed (price, and a product name or EAN) - set the missing ones below."
                 : "No client column found and no client typed above - either set one below or fill in \"Client for this batch\" above."}
@@ -400,20 +375,43 @@ export default function SentOffersImportPage() {
               </tbody>
             </table>
           </div>
-          <div className="flex items-center gap-3">
-            <button
-              onClick={handleQuickImport}
-              disabled={!mappingReady || quickImporting || !preview || preview.items.length === 0}
-              className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-700 disabled:opacity-50"
-            >
-              {quickImporting ? "Importing…" : `Import ${preview?.items.length ?? 0} row(s)`}
-            </button>
-            {mappingReady && (
-              <button onClick={() => setShowMappingEditor(false)} className="text-sm text-gray-500 hover:text-gray-900">
-                Collapse
+
+          <div className="border-t border-gray-100 pt-3 space-y-2">
+            <label className="flex items-center gap-1.5 text-sm text-gray-700">
+              <input type="checkbox" checked={matchForCost} onChange={(e) => setMatchForCost(e.target.checked)} />
+              Also look up cost, supplier &amp; RRP from the price book (by SKU/EAN)
+            </label>
+            <p className="text-xs text-gray-500 pl-5">
+              Off by default - leave unchecked to just log the sale price with no cost data attached.
+            </p>
+            {matchForCost && (
+              <label className="flex items-center gap-1.5 text-sm text-gray-500 pl-5">
+                <input type="checkbox" checked={reviewFirst} onChange={(e) => setReviewFirst(e.target.checked)} />
+                Review matches before saving
+              </label>
+            )}
+          </div>
+
+          <div className="flex items-center gap-3 pt-1">
+            {matchForCost && reviewFirst ? (
+              <button
+                onClick={runMatch}
+                disabled={!mappingReady || matching || !preview || preview.items.length === 0}
+                className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:border-gray-400"
+              >
+                {matching ? "Matching…" : `Match ${preview?.items.length ?? 0} row(s) & review`}
+              </button>
+            ) : (
+              <button
+                onClick={handleQuickImport}
+                disabled={!mappingReady || quickImporting || !preview || preview.items.length === 0}
+                className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-700 disabled:opacity-50"
+              >
+                {quickImporting ? "Importing…" : `Import ${preview?.items.length ?? 0} row(s)`}
               </button>
             )}
           </div>
+          {matchError && <p className="text-sm text-red-600">{matchError}</p>}
           {quickError && <p className="text-sm text-red-600">{quickError}</p>}
         </div>
       )}
@@ -432,7 +430,9 @@ export default function SentOffersImportPage() {
       {quickResult && (
         <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-6 space-y-2">
           <p className="text-sm font-semibold text-emerald-800">
-            Imported - {quickResult.matched} matched to a cost, {quickResult.unmatched} saved without one
+            {quickResult.matchedCost
+              ? `Imported - ${quickResult.matched} matched to a cost, ${quickResult.unmatched} saved without one`
+              : `Imported - sale price only, no cost data attached`}
             {quickResult.skipped > 0 ? `, ${quickResult.skipped} row(s) skipped` : ""}.
           </p>
           {quickResult.saved.map((s) => (
