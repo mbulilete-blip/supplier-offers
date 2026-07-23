@@ -16,6 +16,7 @@ export type SentOfferColumnRole =
   | "product"
   | "sku"
   | "price"
+  | "rrp"
   | "currency"
   | "qty"
   | "extra";
@@ -27,6 +28,7 @@ export const SENT_OFFER_ROLE_LABELS: Record<SentOfferColumnRole, string> = {
   product: "Product name",
   sku: "SKU / EAN / Barcode",
   price: "Price sent to client",
+  rrp: "RRP",
   currency: "Currency",
   qty: "Quantity",
   extra: "Extra (kept as note)",
@@ -44,6 +46,9 @@ const KEYWORDS: Partial<Record<SentOfferColumnRole, string[]>> = {
   brand: ["brand", "marca"],
   qty: ["qty", "quantity", "units", "pieces", "pcs", "amount", "cantidad"],
   currency: ["currency", "curr", "ccy", "moneda", "divisa"],
+  // Checked ahead of "price" in ROLE_PRIORITY below - "retail price"/"rrp"
+  // would otherwise be swallowed by the bare "price" keyword first.
+  rrp: ["rrp", "retail price", "recommended retail", "msrp", "list price", "pvp"],
   // "sent"/"offered"/"quoted" checked as compound phrases before the bare
   // "price" keyword, same reasoning as inquiryImport.ts's cost-vs-targetPrice
   // split - otherwise a generic "Price" header would win by keyword order
@@ -63,7 +68,7 @@ const KEYWORDS: Partial<Record<SentOfferColumnRole, string[]>> = {
   product: ["product", "description", "name", "article", "item", "title"],
 };
 
-const ROLE_PRIORITY: SentOfferColumnRole[] = ["client", "sku", "brand", "qty", "currency", "price", "product"];
+const ROLE_PRIORITY: SentOfferColumnRole[] = ["client", "sku", "brand", "qty", "currency", "rrp", "price", "product"];
 
 function normalize(h: string): string {
   return h
@@ -122,6 +127,11 @@ export type SentOfferItem = {
   sku: string | null;
   qty: number | null;
   price: number;
+  // User-provided RRP straight from their own file, if they have a column
+  // for it - independent of (and takes precedence over) any RRP that a
+  // matched price-book offer might carry, since it's the more authoritative,
+  // directly-supplied figure. Null when no RRP column is mapped.
+  rrp: number | null;
   currency: string | null;
 };
 
@@ -151,6 +161,7 @@ export function buildSentOfferItems(
   const skuCol = firstByRole("sku");
   const qtyCol = firstByRole("qty");
   const priceCol = firstByRole("price");
+  const rrpCol = firstByRole("rrp");
   const currencyCol = firstByRole("currency");
 
   const dataRows = headerRowIndex >= 0 ? rows.slice(headerRowIndex + 1) : rows;
@@ -183,6 +194,9 @@ export function buildSentOfferItems(
     const brand = brandCol ? r[brandCol.index]?.trim() || null : null;
     const qtyRaw = qtyCol ? r[qtyCol.index]?.trim() : "";
     const qty = qtyRaw ? Number(qtyRaw.replace(",", ".")) : null;
+    const rrpRaw = rrpCol ? r[rrpCol.index]?.trim() : "";
+    const rrpCleaned = rrpRaw ? rrpRaw.replace(/[^\d.,]/g, "").replace(",", ".") : "";
+    const rrp = rrpCleaned ? Number(rrpCleaned) : NaN;
     const currency = currencyCol ? r[currencyCol.index]?.trim().toUpperCase() || null : null;
 
     items.push({
@@ -196,6 +210,7 @@ export function buildSentOfferItems(
       sku,
       qty: qty !== null && Number.isFinite(qty) ? qty : null,
       price,
+      rrp: Number.isFinite(rrp) ? rrp : null,
       currency,
     });
   });

@@ -19,7 +19,7 @@ type MatchResultRow = { item: SentOfferItem; offers: Offer[] };
 type MatchResponse = { results: MatchResultRow[]; summary: { total: number; matched: number; unmatched: number }; truncated: boolean };
 type SavedQuote = { client: string; quoteId: number; items: number };
 
-const ROLE_OPTIONS: SentOfferColumnRole[] = ["client", "product", "brand", "sku", "price", "currency", "qty", "ignore"];
+const ROLE_OPTIONS: SentOfferColumnRole[] = ["client", "product", "brand", "sku", "price", "rrp", "currency", "qty", "ignore"];
 
 async function saveByClient(
   results: MatchResultRow[],
@@ -46,7 +46,10 @@ async function saveByClient(
       costCurrency: offer?.currency ?? null,
       sellPrice: item.price,
       sellCurrency: item.currency || "EUR",
-      rrp: offer?.rrp ?? null,
+      // Uploaded RRP (mapped straight from the client's own file) always
+      // wins when present - it's more authoritative than a matched offer's
+      // RRP, which is only a fallback for when the file didn't have one.
+      rrp: item.rrp ?? offer?.rrp ?? null,
     }));
     const res = await fetch("/api/quotes", {
       method: "POST",
@@ -271,8 +274,8 @@ export default function SentOffersImportPage() {
           <h1 className="text-xl font-semibold">Import Sent Offers</h1>
           <p className="mt-1 text-sm text-gray-500">
             Paste or upload prices already offered to clients by SKU/EAN - client, product/EAN, and price is all
-            you need (add a quantity column too if you have one). Cost, supplier, and RRP from the price book are
-            optional - off unless you turn them on below.
+            you need (add quantity and RRP columns too if you have them - map RRP below to use your own figure).
+            Cost and supplier from the price book are optional - off unless you turn them on below.
           </p>
         </div>
         <Link href="/quotes" className="text-sm text-gray-500 hover:text-gray-900">
@@ -301,11 +304,11 @@ export default function SentOffersImportPage() {
 
         <div className="border-t border-gray-100 pt-4">
           <label className="block text-sm font-medium text-gray-700">…paste rows</label>
-          <p className="mt-1 text-xs text-gray-500">One row per line - client, brand/product, EAN, price, qty (optional). Straight from Excel works fine.</p>
+          <p className="mt-1 text-xs text-gray-500">One row per line - client, brand/product, EAN, price, qty, RRP (all optional except client/product/price). Straight from Excel works fine.</p>
           <textarea
             className="input mt-2 w-full font-mono text-xs"
             rows={5}
-            placeholder={"Client, Brand, Product, EAN, Price, Qty\nNotino, Byoma, Milky Toner 200ml, 8697991005678, 9.90, 500"}
+            placeholder={"Client, Brand, Product, EAN, Price, Qty, RRP\nNotino, Byoma, Milky Toner 200ml, 8697991005678, 9.90, 500, 19.99"}
             value={pasteText}
             onChange={(e) => setPasteText(e.target.value)}
           />
@@ -503,7 +506,7 @@ export default function SentOffersImportPage() {
                           </select>
                         )}
                       </td>
-                      <td className="px-3 py-2 text-xs text-gray-500">{offer?.rrp ?? "—"}</td>
+                      <td className="px-3 py-2 text-xs text-gray-500">{r.item.rrp ?? offer?.rrp ?? "—"}</td>
                       <td className="px-3 py-2 text-xs font-semibold text-gray-700">{margin !== null ? `${margin}%` : "—"}</td>
                     </tr>
                   );
